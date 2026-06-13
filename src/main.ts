@@ -6,6 +6,7 @@ import {
 	Notice,
 	requestUrl,
 	TFile,
+	Events,
 } from "obsidian";
 
 // =============================================================================
@@ -108,6 +109,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 	// Pending auth state for CSRF protection
 	private pendingAuthState: string | null = null;
+
+	// Event emitter for auth state changes
+	public events: Events = new Events();
 
 	async onload() {
 		await this.loadSettings();
@@ -300,6 +304,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		await this.saveSettings();
 		this.setupSyncInterval();
+
+		// Emit auth state change event
+		this.events.trigger("auth-state-changed");
 
 		new Notice("✅ Successfully connected to Google Drive!");
 	}
@@ -818,10 +825,20 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 class VectrolaSyncSettingTab extends PluginSettingTab {
 	plugin: VectrolaSyncPlugin;
+	private authStateHandler: () => void;
 
 	constructor(app: App, plugin: VectrolaSyncPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+
+		// Listen for auth state changes to refresh the UI
+		this.authStateHandler = () => this.display();
+		this.plugin.events.on("auth-state-changed", this.authStateHandler);
+	}
+
+	hide(): void {
+		// Cleanup event listener when settings tab is closed
+		this.plugin.events.off("auth-state-changed", this.authStateHandler);
 	}
 
 	display(): void {

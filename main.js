@@ -72,6 +72,8 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     this.syncInterval = null;
     // Pending auth state for CSRF protection
     this.pendingAuthState = null;
+    // Event emitter for auth state changes
+    this.events = new import_obsidian.Events();
     // =========================================================================
     // Sync Operations
     // =========================================================================
@@ -212,6 +214,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     }
     await this.saveSettings();
     this.setupSyncInterval();
+    this.events.trigger("auth-state-changed");
     new import_obsidian.Notice("\u2705 Successfully connected to Google Drive!");
   }
   async getUserInfo(accessToken) {
@@ -600,6 +603,11 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
+    this.authStateHandler = () => this.display();
+    this.plugin.events.on("auth-state-changed", this.authStateHandler);
+  }
+  hide() {
+    this.plugin.events.off("auth-state-changed", this.authStateHandler);
   }
   display() {
     const { containerEl } = this;
