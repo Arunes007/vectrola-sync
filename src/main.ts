@@ -571,7 +571,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl).setName("Vectrola Sync Settings").setHeading();
+		new Setting(containerEl).setName("Vectrola Sync").setHeading();
 
 		// Auth status
 		const authStatus = containerEl.createEl("p");
@@ -627,7 +627,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 			);
 
 		// Sync Settings
-		new Setting(containerEl).setName("Sync Settings").setHeading();
+		new Setting(containerEl).setName("Sync Options").setHeading();
 
 		new Setting(containerEl)
 			.setName("Drive Folder Path")

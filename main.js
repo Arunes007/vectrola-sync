@@ -416,7 +416,7 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("Vectrola Sync Settings").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Vectrola Sync").setHeading();
     const authStatus = containerEl.createEl("p");
     if (this.plugin.isAuthenticated()) {
       authStatus.innerHTML = "\u2705 <strong>Authenticated with Google Drive</strong>";
@@ -448,7 +448,7 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         this.display();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Sync Settings").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Sync Options").setHeading();
     new import_obsidian.Setting(containerEl).setName("Drive Folder Path").setDesc("Google Drive folder where wiki is stored").addText(
       (text) => text.setPlaceholder("/Vectrola/wiki").setValue(this.plugin.settings.driveFolderPath).onChange(async (value) => {
         this.plugin.settings.driveFolderPath = value;
