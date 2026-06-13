@@ -571,7 +571,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl).setName("Vectrola Sync").setHeading();
+		new Setting(containerEl).setName("Authentication").setHeading();
 
 		// Auth status
 		const authStatus = containerEl.createEl("p");

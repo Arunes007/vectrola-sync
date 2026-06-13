@@ -416,7 +416,7 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("Vectrola Sync").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Authentication").setHeading();
     const authStatus = containerEl.createEl("p");
     if (this.plugin.isAuthenticated()) {
       authStatus.innerHTML = "\u2705 <strong>Authenticated with Google Drive</strong>";
