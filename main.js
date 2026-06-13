@@ -70,6 +70,8 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.syncInterval = null;
+    // Pending auth state for CSRF protection
+    this.pendingAuthState = null;
     // =========================================================================
     // Sync Operations
     // =========================================================================
@@ -81,6 +83,9 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
   }
   async onload() {
     await this.loadSettings();
+    this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
+      this.handleOAuthCallback(params);
+    });
     this.api = {
       fetchDriveFile: this.fetchDriveFile.bind(this),
       isAuthenticated: this.isAuthenticated.bind(this)
@@ -154,6 +159,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = await generateCodeChallenge(codeVerifier);
     const state = generateRandomState();
+    this.pendingAuthState = state;
     try {
       await (0, import_obsidian.requestUrl)({
         url: `${OAUTH_SERVER}/auth/start`,
@@ -164,6 +170,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     } catch (error) {
       console.error("Failed to start auth session:", error);
       new import_obsidian.Notice("Failed to connect to auth server. Please try again.");
+      this.pendingAuthState = null;
       return;
     }
     let authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(GOOGLE_CLIENT_ID)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(SCOPES)}&access_type=offline&prompt=consent&code_challenge=${codeChallenge}&code_challenge_method=S256&state=${state}`;
@@ -176,47 +183,36 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     } catch (e) {
       window.open(authUrl);
     }
-    const code = await this.promptForAuthCode();
-    if (!code) {
-      new import_obsidian.Notice("Authentication cancelled.");
+    new import_obsidian.Notice("\u{1F510} Complete sign-in in your browser...");
+  }
+  // Handle OAuth callback from obsidian://vectrola-auth
+  async handleOAuthCallback(params) {
+    const { access_token, refresh_token, expires_in, state, error } = params;
+    if (state !== this.pendingAuthState) {
+      console.error("OAuth state mismatch:", { expected: this.pendingAuthState, received: state });
+      new import_obsidian.Notice("\u274C Authentication failed: Invalid session. Please try again.");
       return;
     }
-    try {
-      const response = await (0, import_obsidian.requestUrl)({
-        url: `${OAUTH_SERVER}/auth/token`,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, state })
-      });
-      const tokens = response.json;
-      if (tokens.error) {
-        throw new Error(tokens.error);
-      }
-      this.settings.accessToken = tokens.access_token;
-      this.settings.refreshToken = tokens.refresh_token || this.settings.refreshToken;
-      this.settings.tokenExpiry = Date.now() + tokens.expires_in * 1e3;
-      try {
-        const userInfo = await this.getUserInfo(tokens.access_token);
-        if (userInfo.email) {
-          this.settings.userEmail = userInfo.email;
-        }
-      } catch (e) {
-      }
-      await this.saveSettings();
-      new import_obsidian.Notice("\u2705 Successfully connected to Google Drive!");
-      this.setupSyncInterval();
-    } catch (error) {
-      console.error("Token exchange failed:", error);
-      new import_obsidian.Notice(`Authentication failed: ${error.message || "Please try again."}`);
+    this.pendingAuthState = null;
+    if (error || !access_token) {
+      new import_obsidian.Notice(`\u274C Authentication failed: ${error || "No token received"}`);
+      return;
     }
-  }
-  async promptForAuthCode() {
-    return new Promise((resolve) => {
-      const modal = new AuthCodeModal(this.app, (code) => {
-        resolve(code);
-      });
-      modal.open();
-    });
+    this.settings.accessToken = access_token;
+    if (refresh_token) {
+      this.settings.refreshToken = refresh_token;
+    }
+    this.settings.tokenExpiry = Date.now() + parseInt(expires_in) * 1e3;
+    try {
+      const userInfo = await this.getUserInfo(access_token);
+      if (userInfo.email) {
+        this.settings.userEmail = userInfo.email;
+      }
+    } catch (e) {
+    }
+    await this.saveSettings();
+    this.setupSyncInterval();
+    new import_obsidian.Notice("\u2705 Successfully connected to Google Drive!");
   }
   async getUserInfo(accessToken) {
     const response = await (0, import_obsidian.requestUrl)({
@@ -598,42 +594,6 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       console.error("Push failed:", error);
       new import_obsidian.Notice(`Push failed: ${error.message}`);
     }
-  }
-};
-var AuthCodeModal = class extends import_obsidian.Modal {
-  constructor(app, callback) {
-    super(app);
-    this.callback = callback;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Paste Authorization Code" });
-    contentEl.createEl("p", {
-      text: "A browser window opened. After signing in, copy the code shown and paste it here:"
-    });
-    this.inputEl = new import_obsidian.TextComponent(contentEl);
-    this.inputEl.inputEl.addClass("vectrola-input-full-width");
-    this.inputEl.inputEl.placeholder = "Paste code here...";
-    const buttonContainer = contentEl.createDiv({ cls: "vectrola-button-container" });
-    const cancelBtn = buttonContainer.createEl("button", { text: "Cancel" });
-    cancelBtn.onclick = () => {
-      this.callback(null);
-      this.close();
-    };
-    const submitBtn = buttonContainer.createEl("button", {
-      text: "Connect",
-      cls: "mod-cta"
-    });
-    submitBtn.onclick = () => {
-      const code = this.inputEl.getValue().trim();
-      this.callback(code || null);
-      this.close();
-    };
-    setTimeout(() => this.inputEl.inputEl.focus(), 100);
-  }
-  onClose() {
-    const { contentEl } = this;
-    contentEl.empty();
   }
 };
 var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {

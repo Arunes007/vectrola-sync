@@ -6,8 +6,6 @@ import {
 	Notice,
 	requestUrl,
 	TFile,
-	Modal,
-	TextComponent,
 } from "obsidian";
 
 // =============================================================================
@@ -108,8 +106,16 @@ export default class VectrolaSyncPlugin extends Plugin {
 	// Public API for DataviewJS access
 	public api: VectrolaSyncAPI;
 
+	// Pending auth state for CSRF protection
+	private pendingAuthState: string | null = null;
+
 	async onload() {
 		await this.loadSettings();
+
+		// Register OAuth callback handler for obsidian://vectrola-auth
+		this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
+			this.handleOAuthCallback(params);
+		});
 
 		// Expose API for DataviewJS (audio player)
 		this.api = {
@@ -210,6 +216,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Generate random state for CSRF protection
 		const state = generateRandomState();
+		this.pendingAuthState = state;
 
 		// Step 1: Register auth session with server (stores verifier)
 		try {
@@ -222,6 +229,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 		} catch (error) {
 			console.error("Failed to start auth session:", error);
 			new Notice("Failed to connect to auth server. Please try again.");
+			this.pendingAuthState = null;
 			return;
 		}
 
@@ -251,59 +259,49 @@ export default class VectrolaSyncPlugin extends Plugin {
 			window.open(authUrl);
 		}
 
-		// Step 4: Prompt user to enter the code from Railway callback
-		const code = await this.promptForAuthCode();
-		if (!code) {
-			new Notice("Authentication cancelled.");
+		new Notice("🔐 Complete sign-in in your browser...");
+		// Tokens will be received via obsidian://vectrola-auth protocol handler
+	}
+
+	// Handle OAuth callback from obsidian://vectrola-auth
+	private async handleOAuthCallback(params: Record<string, string>) {
+		const { access_token, refresh_token, expires_in, state, error } = params;
+
+		// Verify state to prevent CSRF
+		if (state !== this.pendingAuthState) {
+			console.error("OAuth state mismatch:", { expected: this.pendingAuthState, received: state });
+			new Notice("❌ Authentication failed: Invalid session. Please try again.");
 			return;
 		}
 
-		// Step 5: Exchange code for tokens via server (server has client_secret)
-		try {
-			const response = await requestUrl({
-				url: `${OAUTH_SERVER}/auth/token`,
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ code, state }),
-			});
+		this.pendingAuthState = null;
 
-			const tokens = response.json;
-
-			if (tokens.error) {
-				throw new Error(tokens.error);
-			}
-
-			this.settings.accessToken = tokens.access_token;
-			this.settings.refreshToken = tokens.refresh_token || this.settings.refreshToken;
-			this.settings.tokenExpiry = Date.now() + tokens.expires_in * 1000;
-
-			// Try to get user email for login_hint
-			try {
-				const userInfo = await this.getUserInfo(tokens.access_token);
-				if (userInfo.email) {
-					this.settings.userEmail = userInfo.email;
-				}
-			} catch {
-				// Not critical, ignore
-			}
-
-			await this.saveSettings();
-
-			new Notice("✅ Successfully connected to Google Drive!");
-			this.setupSyncInterval();
-		} catch (error) {
-			console.error("Token exchange failed:", error);
-			new Notice(`Authentication failed: ${error.message || "Please try again."}`);
+		if (error || !access_token) {
+			new Notice(`❌ Authentication failed: ${error || "No token received"}`);
+			return;
 		}
-	}
 
-	async promptForAuthCode(): Promise<string | null> {
-		return new Promise((resolve) => {
-			const modal = new AuthCodeModal(this.app, (code) => {
-				resolve(code);
-			});
-			modal.open();
-		});
+		// Store tokens
+		this.settings.accessToken = access_token;
+		if (refresh_token) {
+			this.settings.refreshToken = refresh_token;
+		}
+		this.settings.tokenExpiry = Date.now() + (parseInt(expires_in) * 1000);
+
+		// Try to get user email for login_hint
+		try {
+			const userInfo = await this.getUserInfo(access_token);
+			if (userInfo.email) {
+				this.settings.userEmail = userInfo.email;
+			}
+		} catch {
+			// Not critical, ignore
+		}
+
+		await this.saveSettings();
+		this.setupSyncInterval();
+
+		new Notice("✅ Successfully connected to Google Drive!");
 	}
 
 	async getUserInfo(accessToken: string): Promise<{ email?: string }> {
@@ -811,59 +809,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 			console.error("Push failed:", error);
 			new Notice(`Push failed: ${error.message}`);
 		}
-	}
-}
-
-// =============================================================================
-// Auth Code Modal
-// =============================================================================
-
-class AuthCodeModal extends Modal {
-	private callback: (code: string | null) => void;
-	private inputEl: TextComponent;
-
-	constructor(app: App, callback: (code: string | null) => void) {
-		super(app);
-		this.callback = callback;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-
-		contentEl.createEl("h2", { text: "Paste Authorization Code" });
-		contentEl.createEl("p", {
-			text: "A browser window opened. After signing in, copy the code shown and paste it here:",
-		});
-
-		this.inputEl = new TextComponent(contentEl);
-		this.inputEl.inputEl.addClass("vectrola-input-full-width");
-		this.inputEl.inputEl.placeholder = "Paste code here...";
-
-		const buttonContainer = contentEl.createDiv({ cls: "vectrola-button-container" });
-
-		const cancelBtn = buttonContainer.createEl("button", { text: "Cancel" });
-		cancelBtn.onclick = () => {
-			this.callback(null);
-			this.close();
-		};
-
-		const submitBtn = buttonContainer.createEl("button", {
-			text: "Connect",
-			cls: "mod-cta",
-		});
-		submitBtn.onclick = () => {
-			const code = this.inputEl.getValue().trim();
-			this.callback(code || null);
-			this.close();
-		};
-
-		// Focus the input
-		setTimeout(() => this.inputEl.inputEl.focus(), 100);
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
 	}
 }
 
