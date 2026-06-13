@@ -627,7 +627,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 			);
 
 		// Sync Options
-		new Setting(containerEl).setName("Sync Options").setHeading();
+		new Setting(containerEl).setName("Synchronization").setHeading();
 
 		new Setting(containerEl)
 			.setName("Drive Folder Path")

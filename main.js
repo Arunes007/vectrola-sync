@@ -448,7 +448,7 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         this.display();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Sync Options").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Synchronization").setHeading();
     new import_obsidian.Setting(containerEl).setName("Drive Folder Path").setDesc("Google Drive folder where wiki is stored").addText(
       (text) => text.setPlaceholder("/Vectrola/wiki").setValue(this.plugin.settings.driveFolderPath).onChange(async (value) => {
         this.plugin.settings.driveFolderPath = value;
