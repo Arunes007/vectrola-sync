@@ -4,7 +4,7 @@ Sync your Vectrola music wiki with Google Drive across devices.
 
 ## Features
 
-- **🔐 One-Click Google Sign-In**: No API keys or credentials needed
+- **🚀 Seamless One-Click OAuth**: Sign in with Google - browser redirects back automatically, no copy-paste!
 - **⬇️ Pull from Drive**: Download latest wiki from Google Drive to your vault
 - **⬆️ Push to Drive**: Upload your vault to Google Drive
 - **📊 Progress Bar**: Visual sync progress with download/skip counts
@@ -38,11 +38,10 @@ Copy `main.js`, `manifest.json`, and `styles.css` to your vault's plugin folder.
 1. Open Obsidian Settings → Vectrola Sync
 2. Click **"Sign in with Google"**
 3. Browser opens → Sign in with your Google account
-4. Copy the authorization code shown on the success page
-5. Paste the code in Obsidian when prompted
-6. Done! ✅
+4. **Browser automatically redirects back to Obsidian** ✨
+5. Done! Settings update to show "Connected" status
 
-No Client ID or Client Secret required - the plugin handles OAuth securely.
+No copy-paste required. No Client ID or Client Secret needed.
 
 ### 2. Configure Settings (Optional)
 
@@ -97,6 +96,21 @@ The plugin caches file hashes, so subsequent syncs skip unchanged files for fast
 3. **Smart sync** → MD5 hash comparison skips unchanged files
 4. **GDrive playback** → Wiki player streams music directly from your Google Drive
 
+## OAuth Flow
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Plugin    │────▶│   Google    │────▶│   Railway   │────▶│  Obsidian   │
+│  (Start)    │     │   OAuth     │     │   Server    │     │  (Tokens)   │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+      │                   │                   │                   │
+      │ Open browser      │ User signs in     │ Exchange code     │ obsidian://
+      │ with auth URL     │ & grants access   │ for tokens        │ vectrola-auth
+      └───────────────────┴───────────────────┴───────────────────┘
+```
+
+The plugin uses Obsidian's protocol handler (`obsidian://vectrola-auth`) to receive tokens directly from the OAuth server - no manual copy-paste needed!
+
 ## GDrive Music Playback
 
 The wiki includes an interactive audio player that can play music directly from Google Drive:
@@ -109,7 +123,12 @@ The wiki includes an interactive audio player that can play music directly from 
 
 ### "Not authenticated" error
 - Go to Settings → Vectrola Sync → Click "Sign in with Google"
-- Complete the OAuth flow and paste the authorization code
+- Complete the OAuth flow in your browser
+
+### Browser doesn't redirect back to Obsidian
+- Make sure Obsidian is running
+- Try signing out and signing in again
+- Check if your browser is blocking the `obsidian://` protocol
 
 ### Files not syncing
 - Check that Drive Folder Path matches what CLI uses (default: `/Vectrola/wiki`)
@@ -128,6 +147,7 @@ The wiki includes an interactive audio player that can play music directly from 
 
 - **No API keys required**: OAuth handled via secure server-side token exchange
 - **Your credentials are safe**: Client secret never leaves the server
+- **CSRF protection**: State parameter prevents cross-site request forgery
 - **Tokens stored locally**: Access tokens saved in Obsidian's plugin data
 - **Minimal permissions**: Only requests access to Drive files
 
