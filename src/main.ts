@@ -887,16 +887,14 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Connection").setHeading();
 
 		if (this.plugin.isAuthenticated()) {
-			const statusEl = containerEl.createEl("div", { cls: "vectrola-status-box" });
-			statusEl.innerHTML = `
-				<div style="display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--background-secondary); border-radius: 8px; margin-bottom: 16px;">
-					<span style="font-size: 24px;">✅</span>
-					<div>
-						<div style="font-weight: 600;">Connected to Google Drive</div>
-						${this.plugin.settings.userEmail ? `<div style="color: var(--text-muted); font-size: 12px;">${this.plugin.settings.userEmail}</div>` : ""}
-					</div>
-				</div>
-			`;
+			const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
+			const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
+			statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "✅" });
+			const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
+			statusText.createEl("div", { cls: "vectrola-status-title", text: "Connected to Google Drive" });
+			if (this.plugin.settings.userEmail) {
+				statusText.createEl("div", { cls: "vectrola-status-subtitle", text: this.plugin.settings.userEmail });
+			}
 
 			new Setting(containerEl)
 				.setName("Sign out")
@@ -911,16 +909,12 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 						})
 				);
 		} else {
-			const statusEl = containerEl.createEl("div", { cls: "vectrola-status-box" });
-			statusEl.innerHTML = `
-				<div style="display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--background-secondary); border-radius: 8px; margin-bottom: 16px;">
-					<span style="font-size: 24px;">🔗</span>
-					<div>
-						<div style="font-weight: 600;">Not connected</div>
-						<div style="color: var(--text-muted); font-size: 12px;">Sign in to sync your music wiki</div>
-					</div>
-				</div>
-			`;
+			const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
+			const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
+			statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "🔗" });
+			const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
+			statusText.createEl("div", { cls: "vectrola-status-title", text: "Not connected" });
+			statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Sign in to sync your music wiki" });
 
 			new Setting(containerEl)
 				.setName("Sign in with Google")
