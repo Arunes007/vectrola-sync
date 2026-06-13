@@ -528,13 +528,9 @@ class AuthCodeModal extends Modal {
 		});
 
 		this.inputEl = new TextComponent(contentEl);
-		this.inputEl.inputEl.style.width = "100%";
-		this.inputEl.inputEl.style.marginBottom = "10px";
+		this.inputEl.inputEl.addClass("vectrola-input-full-width");
 
-		const buttonContainer = contentEl.createDiv();
-		buttonContainer.style.display = "flex";
-		buttonContainer.style.justifyContent = "flex-end";
-		buttonContainer.style.gap = "10px";
+		const buttonContainer = contentEl.createDiv({ cls: "vectrola-button-container" });
 
 		const cancelBtn = buttonContainer.createEl("button", { text: "Cancel" });
 		cancelBtn.onclick = () => {
@@ -581,10 +577,10 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 		const authStatus = containerEl.createEl("p");
 		if (this.plugin.isAuthenticated()) {
 			authStatus.innerHTML = "✅ <strong>Authenticated with Google Drive</strong>";
-			authStatus.style.color = "green";
+			authStatus.addClass("vectrola-status-authenticated");
 		} else {
 			authStatus.innerHTML = "❌ <strong>Not authenticated</strong>";
-			authStatus.style.color = "red";
+			authStatus.addClass("vectrola-status-unauthenticated");
 		}
 
 		// OAuth Credentials

@@ -386,12 +386,8 @@ var AuthCodeModal = class extends import_obsidian2.Modal {
       text: "After authorizing in your browser, copy the code and paste it here:"
     });
     this.inputEl = new import_obsidian2.TextComponent(contentEl);
-    this.inputEl.inputEl.style.width = "100%";
-    this.inputEl.inputEl.style.marginBottom = "10px";
-    const buttonContainer = contentEl.createDiv();
-    buttonContainer.style.display = "flex";
-    buttonContainer.style.justifyContent = "flex-end";
-    buttonContainer.style.gap = "10px";
+    this.inputEl.inputEl.addClass("vectrola-input-full-width");
+    const buttonContainer = contentEl.createDiv({ cls: "vectrola-button-container" });
     const cancelBtn = buttonContainer.createEl("button", { text: "Cancel" });
     cancelBtn.onclick = () => {
       this.callback(null);
@@ -424,10 +420,10 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
     const authStatus = containerEl.createEl("p");
     if (this.plugin.isAuthenticated()) {
       authStatus.innerHTML = "\u2705 <strong>Authenticated with Google Drive</strong>";
-      authStatus.style.color = "green";
+      authStatus.addClass("vectrola-status-authenticated");
     } else {
       authStatus.innerHTML = "\u274C <strong>Not authenticated</strong>";
-      authStatus.style.color = "red";
+      authStatus.addClass("vectrola-status-unauthenticated");
     }
     containerEl.createEl("h3", { text: "Google OAuth Credentials" });
     containerEl.createEl("p", {

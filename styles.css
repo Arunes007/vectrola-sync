@@ -1,1 +1,20 @@
 /* Vectrola Sync Plugin Styles */
+
+.vectrola-input-full-width {
+	width: 100%;
+	margin-bottom: 10px;
+}
+
+.vectrola-button-container {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+}
+
+.vectrola-status-authenticated {
+	color: var(--text-success);
+}
+
+.vectrola-status-unauthenticated {
+	color: var(--text-error);
+}
