@@ -5,7 +5,7 @@
 	"minAppVersion": "1.0.0",
 	"description": "Sync your Vectrola music wiki with Google Drive. Pull/push wiki files across devices.",
 	"author": "Arunesh Singh",
-	"authorUrl": "https://github.com/Arunes007/vectrola-sync",
+	"authorUrl": "https://github.com/Arunes007",
 	"fundingUrl": "",
 	"isDesktopOnly": false
 }
