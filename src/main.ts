@@ -571,7 +571,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl("h2", { text: "Vectrola Sync Settings" });
+		new Setting(containerEl).setName("Vectrola Sync Settings").setHeading();
 
 		// Auth status
 		const authStatus = containerEl.createEl("p");
@@ -584,7 +584,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 		}
 
 		// OAuth Credentials
-		containerEl.createEl("h3", { text: "Google OAuth Credentials" });
+		new Setting(containerEl).setName("Google OAuth Credentials").setHeading();
 		containerEl.createEl("p", {
 			text: "Get credentials from Google Cloud Console. Create an OAuth 2.0 Client ID (Desktop app).",
 			cls: "setting-item-description",
@@ -627,7 +627,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 			);
 
 		// Sync Settings
-		containerEl.createEl("h3", { text: "Sync Settings" });
+		new Setting(containerEl).setName("Sync Settings").setHeading();
 
 		new Setting(containerEl)
 			.setName("Drive Folder Path")
@@ -670,7 +670,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 			);
 
 		// Manual Sync
-		containerEl.createEl("h3", { text: "Manual Sync" });
+		new Setting(containerEl).setName("Manual Sync").setHeading();
 
 		new Setting(containerEl)
 			.setName("Pull from Drive")

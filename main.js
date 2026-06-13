@@ -416,7 +416,7 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Vectrola Sync Settings" });
+    new import_obsidian.Setting(containerEl).setName("Vectrola Sync Settings").setHeading();
     const authStatus = containerEl.createEl("p");
     if (this.plugin.isAuthenticated()) {
       authStatus.innerHTML = "\u2705 <strong>Authenticated with Google Drive</strong>";
@@ -425,7 +425,7 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
       authStatus.innerHTML = "\u274C <strong>Not authenticated</strong>";
       authStatus.addClass("vectrola-status-unauthenticated");
     }
-    containerEl.createEl("h3", { text: "Google OAuth Credentials" });
+    new import_obsidian.Setting(containerEl).setName("Google OAuth Credentials").setHeading();
     containerEl.createEl("p", {
       text: "Get credentials from Google Cloud Console. Create an OAuth 2.0 Client ID (Desktop app).",
       cls: "setting-item-description"
@@ -448,7 +448,7 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         this.display();
       })
     );
-    containerEl.createEl("h3", { text: "Sync Settings" });
+    new import_obsidian.Setting(containerEl).setName("Sync Settings").setHeading();
     new import_obsidian.Setting(containerEl).setName("Drive Folder Path").setDesc("Google Drive folder where wiki is stored").addText(
       (text) => text.setPlaceholder("/Vectrola/wiki").setValue(this.plugin.settings.driveFolderPath).onChange(async (value) => {
         this.plugin.settings.driveFolderPath = value;
@@ -469,7 +469,7 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         this.plugin.setupSyncInterval();
       })
     );
-    containerEl.createEl("h3", { text: "Manual Sync" });
+    new import_obsidian.Setting(containerEl).setName("Manual Sync").setHeading();
     new import_obsidian.Setting(containerEl).setName("Pull from Drive").setDesc("Download latest wiki from Google Drive").addButton(
       (btn) => btn.setButtonText("Pull").onClick(async () => {
         await this.plugin.syncFromDrive();
