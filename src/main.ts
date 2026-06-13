@@ -626,7 +626,7 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 				})
 			);
 
-		// Sync Settings
+		// Sync Options
 		new Setting(containerEl).setName("Sync Options").setHeading();
 
 		new Setting(containerEl)
