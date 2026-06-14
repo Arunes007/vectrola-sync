@@ -852,6 +852,8 @@ button.vectrola-header-btn.vectrola-header-btn-shuffle:hover {
 .vectrola-list-header {
 	display: flex;
 	padding: 8px 12px;
+	padding-left: 64px;  /* 40px thumbnail + 12px gap + 12px base */
+	padding-right: 52px; /* 28px button + 12px gap + 12px base */
 	border-bottom: 1px solid var(--background-modifier-border);
 	font-size: 12px;
 	font-weight: 600;
@@ -877,8 +879,8 @@ button.vectrola-header-btn.vectrola-header-btn-shuffle:hover {
 	text-align: right;
 }
 
-/* Mobile responsive - page header */
-@media (max-width: 600px) {
+/* Mobile responsive - page header only (viewport-based) */
+@media (max-width: 900px) {
 	.vectrola-page-header {
 		flex-direction: column;
 		align-items: center;
@@ -894,11 +896,17 @@ button.vectrola-header-btn.vectrola-header-btn-shuffle:hover {
 	.vectrola-header-actions {
 		justify-content: center;
 	}
+}
 
-	.vectrola-col-artist,
-	.vectrola-col-album {
-		display: none;
-	}
+/* Compact mode - hide Artist and Album columns (container-based via ResizeObserver) */
+.vectrola-track-list.vectrola-compact .vectrola-track-row-artist,
+.vectrola-track-list.vectrola-compact .vectrola-track-row-album {
+	display: none !important;
+}
+
+.vectrola-list-header.vectrola-compact .vectrola-col-artist,
+.vectrola-list-header.vectrola-compact .vectrola-col-album {
+	display: none !important;
 }
 
 
@@ -997,38 +1005,48 @@ button.vectrola-header-btn.vectrola-header-btn-shuffle:hover {
 	100% { transform: scaleY(1); }
 }
 
-/* Track Info */
-.vectrola-track-row-info {
-	flex: 1;
-	min-width: 0;
-}
-
+/* Track Row Columns */
 .vectrola-track-row-title {
+	flex: 2;
 	font-weight: 500;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	min-width: 0;
 }
 
 .vectrola-track-row.is-playing .vectrola-track-row-title {
 	color: var(--vectrola-accent);
 }
 
-.vectrola-track-row-subtitle {
-	font-size: 12px;
+.vectrola-track-row-artist {
+	flex: 1;
+	font-size: 13px;
 	color: var(--text-muted);
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	min-width: 0;
+}
+
+.vectrola-track-row-album {
+	flex: 1;
+	font-size: 13px;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
 }
 
 /* Duration */
 .vectrola-track-row-duration {
+	width: 50px;
 	font-size: 12px;
 	color: var(--text-muted);
 	flex-shrink: 0;
 	font-variant-numeric: tabular-nums;
-	margin-right: 4px;
+	text-align: right;
 }
 
 /* More Button (three dots) */

@@ -52,6 +52,7 @@ interface TrackInfo {
 	id: string;
 	title: string;
 	artist: string;
+	album?: string;
 	duration?: string;
 	artwork_url?: string;
 	path: string;
@@ -408,21 +409,21 @@ export default class VectrolaSyncPlugin extends Plugin {
 					equalizer.createEl("span", { cls: "vectrola-eq-bar" });
 				}
 
-				// Track info
-				const info = row.createEl("div");
-				info.className = "vectrola-track-row-info";
+				// Song column (title only)
+				const titleCol = row.createEl("div", { text: track.title });
+				titleCol.className = "vectrola-track-row-title vectrola-col-song";
 
-				const titleEl = info.createEl("div", { text: track.title });
-				titleEl.className = "vectrola-track-row-title";
+				// Artist column
+				const artistCol = row.createEl("div", { text: track.artist || "" });
+				artistCol.className = "vectrola-track-row-artist vectrola-col-artist";
 
-				const subtitleEl = info.createEl("div", { text: track.artist });
-				subtitleEl.className = "vectrola-track-row-subtitle";
+				// Album column
+				const albumCol = row.createEl("div", { text: track.album || "" });
+				albumCol.className = "vectrola-track-row-album vectrola-col-album";
 
-				// Duration
-				if (track.duration) {
-					const durationEl = row.createEl("div", { text: track.duration });
-					durationEl.className = "vectrola-track-row-duration";
-				}
+				// Time column
+				const timeCol = row.createEl("div", { text: track.duration || "" });
+				timeCol.className = "vectrola-track-row-duration vectrola-col-time";
 
 				// More options button (three dots)
 				const moreBtn = row.createEl("button");
@@ -455,10 +456,22 @@ export default class VectrolaSyncPlugin extends Plugin {
 			}
 			window.vectrolaHighlightUpdaters.add(updateLocalHighlight);
 
+			// Watch container width and toggle compact mode (hide Artist/Album columns)
+			const resizeObserver = new ResizeObserver((entries) => {
+				for (const entry of entries) {
+					const width = entry.contentRect.width;
+					const isCompact = width < 700;
+					trackListEl.classList.toggle("vectrola-compact", isCompact);
+					listHeader.classList.toggle("vectrola-compact", isCompact);
+				}
+			});
+			resizeObserver.observe(container);
+
 			// Cleanup when page unloads
 			const observer = new MutationObserver(() => {
 				if (!document.contains(trackListEl)) {
 					window.vectrolaHighlightUpdaters?.delete(updateLocalHighlight);
+					resizeObserver.disconnect();
 					observer.disconnect();
 				}
 			});

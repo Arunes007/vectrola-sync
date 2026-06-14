@@ -326,16 +326,14 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         for (let b = 0; b < 3; b++) {
           equalizer.createEl("span", { cls: "vectrola-eq-bar" });
         }
-        const info = row.createEl("div");
-        info.className = "vectrola-track-row-info";
-        const titleEl2 = info.createEl("div", { text: track.title });
-        titleEl2.className = "vectrola-track-row-title";
-        const subtitleEl = info.createEl("div", { text: track.artist });
-        subtitleEl.className = "vectrola-track-row-subtitle";
-        if (track.duration) {
-          const durationEl = row.createEl("div", { text: track.duration });
-          durationEl.className = "vectrola-track-row-duration";
-        }
+        const titleCol = row.createEl("div", { text: track.title });
+        titleCol.className = "vectrola-track-row-title vectrola-col-song";
+        const artistCol = row.createEl("div", { text: track.artist || "" });
+        artistCol.className = "vectrola-track-row-artist vectrola-col-artist";
+        const albumCol = row.createEl("div", { text: track.album || "" });
+        albumCol.className = "vectrola-track-row-album vectrola-col-album";
+        const timeCol = row.createEl("div", { text: track.duration || "" });
+        timeCol.className = "vectrola-track-row-duration vectrola-col-time";
         const moreBtn = row.createEl("button");
         moreBtn.className = "vectrola-track-row-more";
         moreBtn.innerHTML = ICONS.more;
@@ -357,10 +355,20 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         window.vectrolaHighlightUpdaters = /* @__PURE__ */ new Set();
       }
       window.vectrolaHighlightUpdaters.add(updateLocalHighlight);
+      const resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const width = entry.contentRect.width;
+          const isCompact = width < 700;
+          trackListEl.classList.toggle("vectrola-compact", isCompact);
+          listHeader.classList.toggle("vectrola-compact", isCompact);
+        }
+      });
+      resizeObserver.observe(container);
       const observer = new MutationObserver(() => {
         var _a2;
         if (!document.contains(trackListEl)) {
           (_a2 = window.vectrolaHighlightUpdaters) == null ? void 0 : _a2.delete(updateLocalHighlight);
+          resizeObserver.disconnect();
           observer.disconnect();
         }
       });
