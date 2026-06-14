@@ -88,6 +88,9 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
       this.handleOAuthCallback(params);
     });
+    this.registerMarkdownCodeBlockProcessor("vectrola", (source, el, ctx) => {
+      this.renderVectrolaPlayer(source, el);
+    });
     this.api = {
       fetchDriveFile: this.fetchDriveFile.bind(this),
       isAuthenticated: this.isAuthenticated.bind(this)
@@ -153,6 +156,374 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
   }
   isAuthenticated() {
     return !!(this.settings.accessToken && this.settings.refreshToken);
+  }
+  // =========================================================================
+  // Vectrola Audio Player Renderer
+  // =========================================================================
+  renderVectrolaPlayer(source, container) {
+    try {
+      const config = JSON.parse(source);
+      const playlist = config.playlist || [];
+      const pageTitle = config.title || "";
+      if (!playlist.length) {
+        container.createEl("p", { text: "No tracks available" });
+        return;
+      }
+      if (!window.vectrolaPlayer) {
+        window.vectrolaPlayer = {
+          audio: new Audio(),
+          currentTrack: null,
+          currentIndex: -1,
+          isPlaying: false,
+          shuffleMode: false,
+          shuffleHistory: [],
+          playlist: [],
+          playlistSource: null,
+          ui: null
+        };
+        window.vectrolaPlayer.audio.preload = "none";
+        this.setupAudioEventListeners();
+      }
+      const player = window.vectrolaPlayer;
+      const trackCount = container.createEl("p", { text: `${playlist.length} Tracks` });
+      trackCount.style.cssText = "font-weight: bold; margin-bottom: 16px; color: var(--text-muted);";
+      const trackListEl = container.createEl("div");
+      trackListEl.style.cssText = "margin: 16px 0;";
+      const updateLocalHighlight = () => {
+        trackListEl.querySelectorAll("div[data-index]").forEach((row, i) => {
+          const track = playlist[i];
+          const isCurrentTrack = player.currentTrack && player.currentTrack.path === track.path;
+          row.classList.toggle("playing", !!isCurrentTrack);
+          row.style.background = isCurrentTrack ? "var(--interactive-accent)" : "var(--background-secondary)";
+          row.style.color = isCurrentTrack ? "var(--text-on-accent)" : "";
+        });
+      };
+      const playTrack = (index) => {
+        player.playlist = playlist;
+        player.playlistSource = pageTitle;
+        this.playTrack(index);
+      };
+      playlist.forEach((track, i) => {
+        const row = trackListEl.createEl("div");
+        row.style.cssText = "display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; margin: 6px 0; border-radius: 8px; background: var(--background-secondary); cursor: pointer; transition: background 0.2s;";
+        row.dataset.index = String(i);
+        row.onmouseenter = () => {
+          if (!row.classList.contains("playing"))
+            row.style.background = "var(--background-modifier-hover)";
+        };
+        row.onmouseleave = () => {
+          if (!row.classList.contains("playing"))
+            row.style.background = "var(--background-secondary)";
+        };
+        const info = row.createEl("div");
+        info.style.cssText = "flex: 1; min-width: 0;";
+        const titleEl = info.createEl("div", { text: track.title });
+        titleEl.style.cssText = "font-weight: 500;";
+        const sourceIndicator = track.gdrive_id ? "\u2601\uFE0F" : track.path ? "\u{1F4BE}" : "\u274C";
+        const artistEl = info.createEl("div", { text: `${track.artist} ${sourceIndicator}` });
+        artistEl.style.cssText = "font-size: 0.85em; color: var(--text-muted);";
+        const btnContainer = row.createEl("div");
+        btnContainer.style.cssText = "display: flex; gap: 4px;";
+        const infoBtn = btnContainer.createEl("button", { text: "\u2139\uFE0F" });
+        infoBtn.style.cssText = "background: none; border: none; font-size: 1.1em; cursor: pointer; padding: 6px 8px; border-radius: 6px;";
+        infoBtn.title = "Track details";
+        infoBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.app.workspace.openLinkText(track.link, "", false);
+        });
+        const playBtn = btnContainer.createEl("button", { text: "\u{1F3B5}" });
+        playBtn.style.cssText = "background: none; border: none; font-size: 1.3em; cursor: pointer; padding: 6px 10px; border-radius: 6px;";
+        row.addEventListener("click", () => {
+          player.playlist = playlist;
+          player.playlistSource = pageTitle;
+          player.shuffleHistory = [];
+          playTrack(i);
+        });
+      });
+      this.ensurePlayerBar();
+      updateLocalHighlight();
+      if (!window.vectrolaHighlightUpdaters) {
+        window.vectrolaHighlightUpdaters = /* @__PURE__ */ new Set();
+      }
+      window.vectrolaHighlightUpdaters.add(updateLocalHighlight);
+      const observer = new MutationObserver(() => {
+        var _a;
+        if (!document.contains(trackListEl)) {
+          (_a = window.vectrolaHighlightUpdaters) == null ? void 0 : _a.delete(updateLocalHighlight);
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    } catch (e) {
+      console.error("Failed to render Vectrola player:", e);
+      container.createEl("p", { text: "Error loading player", cls: "vectrola-error" });
+    }
+  }
+  setupAudioEventListeners() {
+    const player = window.vectrolaPlayer;
+    if (!player)
+      return;
+    player.audio.addEventListener("timeupdate", () => {
+      const pf = document.getElementById("vectrola-progress-fill");
+      const ct = document.getElementById("vectrola-current-time");
+      if (player.audio.duration && pf && ct) {
+        pf.style.width = player.audio.currentTime / player.audio.duration * 100 + "%";
+        ct.textContent = this.formatTime(player.audio.currentTime);
+      }
+    });
+    player.audio.addEventListener("loadedmetadata", () => {
+      const tt = document.getElementById("vectrola-total-time");
+      if (tt)
+        tt.textContent = this.formatTime(player.audio.duration);
+    });
+    player.audio.addEventListener("ended", () => this.nextTrack());
+  }
+  formatTime(seconds) {
+    if (isNaN(seconds))
+      return "0:00";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  }
+  async playTrack(index) {
+    var _a;
+    const player = window.vectrolaPlayer;
+    if (!player || index < 0 || index >= player.playlist.length)
+      return;
+    const track = player.playlist[index];
+    try {
+      if (player.audio.src && player.audio.src.startsWith("blob:")) {
+        URL.revokeObjectURL(player.audio.src);
+      }
+      if (track.gdrive_id) {
+        console.log("Playing from GDrive:", track.gdrive_id);
+        try {
+          if (this.isAuthenticated()) {
+            const arrayBuffer = await this.fetchDriveFile(track.gdrive_id);
+            const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+            const blobUrl = URL.createObjectURL(blob);
+            player.audio.src = blobUrl;
+            console.log("Playing via plugin API");
+          } else {
+            const fs = require("fs");
+            const path = require("path");
+            const os = require("os");
+            const tokenPath = path.join(os.homedir(), ".config", "vectrola", "gdrive_token.json");
+            const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+            const accessToken = tokenData.token;
+            const response = await fetch(
+              `https://www.googleapis.com/drive/v3/files/${track.gdrive_id}?alt=media`,
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            if (!response.ok) {
+              throw new Error(`GDrive fetch failed: ${response.status}`);
+            }
+            const arrayBuffer = await response.arrayBuffer();
+            const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+            player.audio.src = URL.createObjectURL(blob);
+            console.log("Playing via CLI token");
+          }
+        } catch (gdriveError) {
+          console.error("GDrive playback failed, trying local:", gdriveError);
+          if (track.path) {
+            const fs = require("fs");
+            const buffer = fs.readFileSync(track.path);
+            const blob = new Blob([buffer], { type: "audio/mpeg" });
+            player.audio.src = URL.createObjectURL(blob);
+          } else {
+            throw gdriveError;
+          }
+        }
+      } else if (track.path) {
+        console.log("Playing from local:", track.path);
+        try {
+          const fs = require("fs");
+          const buffer = fs.readFileSync(track.path);
+          const blob = new Blob([buffer], { type: "audio/mpeg" });
+          const blobUrl = URL.createObjectURL(blob);
+          player.audio.src = blobUrl;
+        } catch (e) {
+          console.error("Local file not found:", track.path, e);
+          if (index + 1 < player.playlist.length) {
+            this.playTrack(index + 1);
+          }
+          return;
+        }
+      } else {
+        console.warn("No playback source for track:", track.title);
+        return;
+      }
+      player.currentIndex = index;
+      player.currentTrack = track;
+      await player.audio.play();
+      player.isPlaying = true;
+      const titleEl = document.getElementById("vectrola-track-title");
+      const artistEl = document.getElementById("vectrola-track-artist");
+      const ppBtn = document.getElementById("vectrola-playpause-btn");
+      if (titleEl)
+        titleEl.textContent = track.title;
+      if (artistEl)
+        artistEl.textContent = track.artist;
+      if (ppBtn)
+        ppBtn.textContent = "\u23F8";
+      (_a = window.vectrolaHighlightUpdaters) == null ? void 0 : _a.forEach((fn) => fn());
+      if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
+        player.shuffleHistory.push(index);
+      }
+    } catch (e) {
+      console.error("Playback failed:", e);
+    }
+  }
+  togglePlayPause() {
+    const player = window.vectrolaPlayer;
+    if (!player)
+      return;
+    if (player.currentIndex === -1) {
+      if (player.playlist.length > 0) {
+        this.playTrack(0);
+      }
+      return;
+    }
+    const ppBtn = document.getElementById("vectrola-playpause-btn");
+    if (player.isPlaying) {
+      player.audio.pause();
+      player.isPlaying = false;
+      if (ppBtn)
+        ppBtn.textContent = "\u25B6";
+    } else {
+      player.audio.play().catch((e) => console.error("Playback failed:", e));
+      player.isPlaying = true;
+      if (ppBtn)
+        ppBtn.textContent = "\u23F8";
+    }
+  }
+  nextTrack() {
+    const player = window.vectrolaPlayer;
+    if (!player || !player.playlist.length)
+      return;
+    if (player.shuffleMode) {
+      const unplayed = player.playlist.map((_, i) => i).filter((i) => !player.shuffleHistory.includes(i));
+      if (unplayed.length === 0) {
+        player.shuffleHistory = [];
+        this.nextTrack();
+        return;
+      }
+      const randomIndex = unplayed[Math.floor(Math.random() * unplayed.length)];
+      this.playTrack(randomIndex);
+    } else {
+      this.playTrack((player.currentIndex + 1) % player.playlist.length);
+    }
+  }
+  prevTrack() {
+    const player = window.vectrolaPlayer;
+    if (!player || !player.playlist.length)
+      return;
+    if (player.shuffleMode && player.shuffleHistory.length > 1) {
+      player.shuffleHistory.pop();
+      this.playTrack(player.shuffleHistory[player.shuffleHistory.length - 1]);
+    } else {
+      this.playTrack(player.currentIndex <= 0 ? player.playlist.length - 1 : player.currentIndex - 1);
+    }
+  }
+  toggleShuffle() {
+    const player = window.vectrolaPlayer;
+    if (!player)
+      return;
+    player.shuffleMode = !player.shuffleMode;
+    const sBtn = document.getElementById("vectrola-shuffle-btn");
+    if (sBtn)
+      sBtn.style.color = player.shuffleMode ? "var(--interactive-accent)" : "";
+    if (!player.shuffleMode) {
+      player.shuffleHistory = [];
+    } else if (player.currentIndex >= 0) {
+      player.shuffleHistory = [player.currentIndex];
+    }
+  }
+  ensurePlayerBar() {
+    const player = window.vectrolaPlayer;
+    if (!player)
+      return;
+    let playerBar = document.getElementById("vectrola-global-player");
+    if (playerBar)
+      return;
+    playerBar = document.createElement("div");
+    playerBar.id = "vectrola-global-player";
+    playerBar.style.cssText = "position: fixed; bottom: 0; left: 0; right: 0; background: var(--background-secondary); border-top: 1px solid var(--background-modifier-border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; z-index: 1000; box-shadow: 0 -2px 10px rgba(0,0,0,0.1);";
+    const trackDisplay = document.createElement("div");
+    trackDisplay.style.cssText = "flex: 1; min-width: 0;";
+    const trackTitleEl = document.createElement("div");
+    trackTitleEl.id = "vectrola-track-title";
+    trackTitleEl.style.cssText = "font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;";
+    trackTitleEl.textContent = player.currentTrack ? player.currentTrack.title : "Select a track to play";
+    const trackArtistEl = document.createElement("div");
+    trackArtistEl.id = "vectrola-track-artist";
+    trackArtistEl.style.cssText = "font-size: 0.85em; color: var(--text-muted);";
+    trackArtistEl.textContent = player.currentTrack ? player.currentTrack.artist : "";
+    trackDisplay.appendChild(trackTitleEl);
+    trackDisplay.appendChild(trackArtistEl);
+    const controls = document.createElement("div");
+    controls.style.cssText = "display: flex; gap: 8px;";
+    const btnStyle = "background: none; border: none; font-size: 1.5em; cursor: pointer; padding: 8px; border-radius: 50%; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;";
+    const shuffleBtn = document.createElement("button");
+    shuffleBtn.id = "vectrola-shuffle-btn";
+    shuffleBtn.style.cssText = btnStyle;
+    shuffleBtn.textContent = "\u{1F500}";
+    shuffleBtn.title = "Shuffle";
+    if (player.shuffleMode)
+      shuffleBtn.style.color = "var(--interactive-accent)";
+    const prevBtn = document.createElement("button");
+    prevBtn.style.cssText = btnStyle;
+    prevBtn.textContent = "\u23EE";
+    prevBtn.title = "Previous";
+    const playPauseBtn = document.createElement("button");
+    playPauseBtn.id = "vectrola-playpause-btn";
+    playPauseBtn.style.cssText = btnStyle;
+    playPauseBtn.textContent = player.isPlaying ? "\u23F8" : "\u25B6";
+    playPauseBtn.title = "Play";
+    const nextBtn = document.createElement("button");
+    nextBtn.style.cssText = btnStyle;
+    nextBtn.textContent = "\u23ED";
+    nextBtn.title = "Next";
+    controls.appendChild(shuffleBtn);
+    controls.appendChild(prevBtn);
+    controls.appendChild(playPauseBtn);
+    controls.appendChild(nextBtn);
+    const progressContainer = document.createElement("div");
+    progressContainer.style.cssText = "flex: 2; display: flex; align-items: center; gap: 8px;";
+    const currentTimeEl = document.createElement("span");
+    currentTimeEl.id = "vectrola-current-time";
+    currentTimeEl.style.cssText = "font-size: 0.8em; color: var(--text-muted); min-width: 40px;";
+    currentTimeEl.textContent = "0:00";
+    const progressBarContainer = document.createElement("div");
+    progressBarContainer.id = "vectrola-progress-bar";
+    progressBarContainer.style.cssText = "flex: 1; height: 6px; background: var(--background-modifier-border); border-radius: 3px; cursor: pointer; position: relative;";
+    const progressFill = document.createElement("div");
+    progressFill.id = "vectrola-progress-fill";
+    progressFill.style.cssText = "height: 100%; background: var(--interactive-accent); border-radius: 3px; width: 0%; transition: width 0.1s linear;";
+    progressBarContainer.appendChild(progressFill);
+    const totalTimeEl = document.createElement("span");
+    totalTimeEl.id = "vectrola-total-time";
+    totalTimeEl.style.cssText = "font-size: 0.8em; color: var(--text-muted); min-width: 40px;";
+    totalTimeEl.textContent = "0:00";
+    progressContainer.appendChild(currentTimeEl);
+    progressContainer.appendChild(progressBarContainer);
+    progressContainer.appendChild(totalTimeEl);
+    playerBar.appendChild(trackDisplay);
+    playerBar.appendChild(controls);
+    playerBar.appendChild(progressContainer);
+    document.body.appendChild(playerBar);
+    playPauseBtn.addEventListener("click", () => this.togglePlayPause());
+    nextBtn.addEventListener("click", () => this.nextTrack());
+    prevBtn.addEventListener("click", () => this.prevTrack());
+    shuffleBtn.addEventListener("click", () => this.toggleShuffle());
+    progressBarContainer.addEventListener("click", (e) => {
+      if (player.audio.duration) {
+        const rect = progressBarContainer.getBoundingClientRect();
+        const pos = (e.clientX - rect.left) / rect.width;
+        player.audio.currentTime = pos * player.audio.duration;
+      }
+    });
+    player.ui = { playerBar, trackTitleEl, trackArtistEl, playPauseBtn, shuffleBtn, progressFill, currentTimeEl, totalTimeEl };
   }
   // =========================================================================
   // OAuth Authentication (Server-side token exchange)

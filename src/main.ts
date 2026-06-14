@@ -44,6 +44,38 @@ interface DriveFile {
 	parents?: string[];
 }
 
+// Track info for audio player
+interface TrackInfo {
+	id: string;
+	title: string;
+	artist: string;
+	path: string;
+	gdrive_id?: string;
+	track_id?: string;
+	link: string;
+}
+
+// Global player state
+interface VectrolaPlayerState {
+	audio: HTMLAudioElement;
+	currentTrack: TrackInfo | null;
+	currentIndex: number;
+	isPlaying: boolean;
+	shuffleMode: boolean;
+	shuffleHistory: number[];
+	playlist: TrackInfo[];
+	playlistSource: string | null;
+	ui: Record<string, HTMLElement> | null;
+}
+
+// Extend Window interface for global player
+declare global {
+	interface Window {
+		vectrolaPlayer?: VectrolaPlayerState;
+		vectrolaHighlightUpdaters?: Set<() => void>;
+	}
+}
+
 const DEFAULT_SETTINGS: VectrolaSyncSettings = {
 	accessToken: "",
 	refreshToken: "",
@@ -121,7 +153,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 			this.handleOAuthCallback(params);
 		});
 
-		// Expose API for DataviewJS (audio player)
+		// Register vectrola code block processor for audio player
+		this.registerMarkdownCodeBlockProcessor("vectrola", (source, el, ctx) => {
+			this.renderVectrolaPlayer(source, el);
+		});
+
+		// Expose API for audio player
 		this.api = {
 			fetchDriveFile: this.fetchDriveFile.bind(this),
 			isAuthenticated: this.isAuthenticated.bind(this),
@@ -207,6 +244,449 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 	isAuthenticated(): boolean {
 		return !!(this.settings.accessToken && this.settings.refreshToken);
+	}
+
+	// =========================================================================
+	// Vectrola Audio Player Renderer
+	// =========================================================================
+
+	private renderVectrolaPlayer(source: string, container: HTMLElement) {
+		try {
+			const config = JSON.parse(source);
+			const playlist: TrackInfo[] = config.playlist || [];
+			const pageTitle: string = config.title || "";
+
+			if (!playlist.length) {
+				container.createEl("p", { text: "No tracks available" });
+				return;
+			}
+
+			// Initialize global player state if needed
+			if (!window.vectrolaPlayer) {
+				window.vectrolaPlayer = {
+					audio: new Audio(),
+					currentTrack: null,
+					currentIndex: -1,
+					isPlaying: false,
+					shuffleMode: false,
+					shuffleHistory: [],
+					playlist: [],
+					playlistSource: null,
+					ui: null,
+				};
+				window.vectrolaPlayer.audio.preload = "none";
+
+				// Set up audio event listeners (only once)
+				this.setupAudioEventListeners();
+			}
+
+			const player = window.vectrolaPlayer;
+
+			// Track count
+			const trackCount = container.createEl("p", { text: `${playlist.length} Tracks` });
+			trackCount.style.cssText = "font-weight: bold; margin-bottom: 16px; color: var(--text-muted);";
+
+			// Build track list
+			const trackListEl = container.createEl("div");
+			trackListEl.style.cssText = "margin: 16px 0;";
+
+			// Update track highlight for this page's list
+			const updateLocalHighlight = () => {
+				trackListEl.querySelectorAll("div[data-index]").forEach((row, i) => {
+					const track = playlist[i];
+					const isCurrentTrack = player.currentTrack && player.currentTrack.path === track.path;
+					row.classList.toggle("playing", !!isCurrentTrack);
+					(row as HTMLElement).style.background = isCurrentTrack ? "var(--interactive-accent)" : "var(--background-secondary)";
+					(row as HTMLElement).style.color = isCurrentTrack ? "var(--text-on-accent)" : "";
+				});
+			};
+
+			// Local wrapper for playTrack that sets this page's playlist
+			const playTrack = (index: number) => {
+				player.playlist = playlist;
+				player.playlistSource = pageTitle;
+				this.playTrack(index);
+			};
+
+			// Render each track row
+			playlist.forEach((track, i) => {
+				const row = trackListEl.createEl("div");
+				row.style.cssText = "display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; margin: 6px 0; border-radius: 8px; background: var(--background-secondary); cursor: pointer; transition: background 0.2s;";
+				row.dataset.index = String(i);
+
+				// Hover effect
+				row.onmouseenter = () => { if (!row.classList.contains("playing")) row.style.background = "var(--background-modifier-hover)"; };
+				row.onmouseleave = () => { if (!row.classList.contains("playing")) row.style.background = "var(--background-secondary)"; };
+
+				const info = row.createEl("div");
+				info.style.cssText = "flex: 1; min-width: 0;";
+
+				const titleEl = info.createEl("div", { text: track.title });
+				titleEl.style.cssText = "font-weight: 500;";
+
+				// Source indicator (GDrive cloud icon or local icon)
+				const sourceIndicator = track.gdrive_id ? "☁️" : (track.path ? "💾" : "❌");
+				const artistEl = info.createEl("div", { text: `${track.artist} ${sourceIndicator}` });
+				artistEl.style.cssText = "font-size: 0.85em; color: var(--text-muted);";
+
+				const btnContainer = row.createEl("div");
+				btnContainer.style.cssText = "display: flex; gap: 4px;";
+
+				const infoBtn = btnContainer.createEl("button", { text: "ℹ️" });
+				infoBtn.style.cssText = "background: none; border: none; font-size: 1.1em; cursor: pointer; padding: 6px 8px; border-radius: 6px;";
+				infoBtn.title = "Track details";
+				infoBtn.addEventListener("click", (e) => {
+					e.stopPropagation();
+					this.app.workspace.openLinkText(track.link, "", false);
+				});
+
+				const playBtn = btnContainer.createEl("button", { text: "🎵" });
+				playBtn.style.cssText = "background: none; border: none; font-size: 1.3em; cursor: pointer; padding: 6px 10px; border-radius: 6px;";
+
+				row.addEventListener("click", () => {
+					player.playlist = playlist;
+					player.playlistSource = pageTitle;
+					player.shuffleHistory = [];
+					playTrack(i);
+				});
+			});
+
+			// Create or get player bar
+			this.ensurePlayerBar();
+
+			// Update highlight when page loads
+			updateLocalHighlight();
+
+			// Register this page's highlight updater globally
+			if (!window.vectrolaHighlightUpdaters) {
+				window.vectrolaHighlightUpdaters = new Set();
+			}
+			window.vectrolaHighlightUpdaters.add(updateLocalHighlight);
+
+			// Cleanup when page unloads
+			const observer = new MutationObserver(() => {
+				if (!document.contains(trackListEl)) {
+					window.vectrolaHighlightUpdaters?.delete(updateLocalHighlight);
+					observer.disconnect();
+				}
+			});
+			observer.observe(document.body, { childList: true, subtree: true });
+
+		} catch (e) {
+			console.error("Failed to render Vectrola player:", e);
+			container.createEl("p", { text: "Error loading player", cls: "vectrola-error" });
+		}
+	}
+
+	private setupAudioEventListeners() {
+		const player = window.vectrolaPlayer;
+		if (!player) return;
+
+		player.audio.addEventListener("timeupdate", () => {
+			const pf = document.getElementById("vectrola-progress-fill");
+			const ct = document.getElementById("vectrola-current-time");
+			if (player.audio.duration && pf && ct) {
+				pf.style.width = (player.audio.currentTime / player.audio.duration) * 100 + "%";
+				ct.textContent = this.formatTime(player.audio.currentTime);
+			}
+		});
+
+		player.audio.addEventListener("loadedmetadata", () => {
+			const tt = document.getElementById("vectrola-total-time");
+			if (tt) tt.textContent = this.formatTime(player.audio.duration);
+		});
+
+		player.audio.addEventListener("ended", () => this.nextTrack());
+	}
+
+	private formatTime(seconds: number): string {
+		if (isNaN(seconds)) return "0:00";
+		const mins = Math.floor(seconds / 60);
+		const secs = Math.floor(seconds % 60);
+		return `${mins}:${secs.toString().padStart(2, "0")}`;
+	}
+
+	private async playTrack(index: number) {
+		const player = window.vectrolaPlayer;
+		if (!player || index < 0 || index >= player.playlist.length) return;
+
+		const track = player.playlist[index];
+
+		try {
+			// Clean up previous blob URL if any
+			if (player.audio.src && player.audio.src.startsWith("blob:")) {
+				URL.revokeObjectURL(player.audio.src);
+			}
+
+			// Try GDrive first, then fall back to local file
+			if (track.gdrive_id) {
+				console.log("Playing from GDrive:", track.gdrive_id);
+				try {
+					if (this.isAuthenticated()) {
+						const arrayBuffer = await this.fetchDriveFile(track.gdrive_id);
+						const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+						const blobUrl = URL.createObjectURL(blob);
+						player.audio.src = blobUrl;
+						console.log("Playing via plugin API");
+					} else {
+						// Fallback: Try CLI token
+						const fs = require("fs");
+						const path = require("path");
+						const os = require("os");
+
+						const tokenPath = path.join(os.homedir(), ".config", "vectrola", "gdrive_token.json");
+						const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+						const accessToken = tokenData.token;
+
+						const response = await fetch(
+							`https://www.googleapis.com/drive/v3/files/${track.gdrive_id}?alt=media`,
+							{ headers: { Authorization: `Bearer ${accessToken}` } }
+						);
+
+						if (!response.ok) {
+							throw new Error(`GDrive fetch failed: ${response.status}`);
+						}
+
+						const arrayBuffer = await response.arrayBuffer();
+						const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+						player.audio.src = URL.createObjectURL(blob);
+						console.log("Playing via CLI token");
+					}
+				} catch (gdriveError) {
+					console.error("GDrive playback failed, trying local:", gdriveError);
+					if (track.path) {
+						const fs = require("fs");
+						const buffer = fs.readFileSync(track.path);
+						const blob = new Blob([buffer], { type: "audio/mpeg" });
+						player.audio.src = URL.createObjectURL(blob);
+					} else {
+						throw gdriveError;
+					}
+				}
+			} else if (track.path) {
+				console.log("Playing from local:", track.path);
+				try {
+					const fs = require("fs");
+					const buffer = fs.readFileSync(track.path);
+					const blob = new Blob([buffer], { type: "audio/mpeg" });
+					const blobUrl = URL.createObjectURL(blob);
+					player.audio.src = blobUrl;
+				} catch (e) {
+					console.error("Local file not found:", track.path, e);
+					if (index + 1 < player.playlist.length) {
+						this.playTrack(index + 1);
+					}
+					return;
+				}
+			} else {
+				console.warn("No playback source for track:", track.title);
+				return;
+			}
+
+			player.currentIndex = index;
+			player.currentTrack = track;
+			await player.audio.play();
+			player.isPlaying = true;
+
+			// Update UI
+			const titleEl = document.getElementById("vectrola-track-title");
+			const artistEl = document.getElementById("vectrola-track-artist");
+			const ppBtn = document.getElementById("vectrola-playpause-btn");
+			if (titleEl) titleEl.textContent = track.title;
+			if (artistEl) artistEl.textContent = track.artist;
+			if (ppBtn) ppBtn.textContent = "⏸";
+
+			// Update all registered highlight updaters
+			window.vectrolaHighlightUpdaters?.forEach(fn => fn());
+
+			if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
+				player.shuffleHistory.push(index);
+			}
+		} catch (e) {
+			console.error("Playback failed:", e);
+		}
+	}
+
+	private togglePlayPause() {
+		const player = window.vectrolaPlayer;
+		if (!player) return;
+
+		if (player.currentIndex === -1) {
+			if (player.playlist.length > 0) {
+				this.playTrack(0);
+			}
+			return;
+		}
+
+		const ppBtn = document.getElementById("vectrola-playpause-btn");
+		if (player.isPlaying) {
+			player.audio.pause();
+			player.isPlaying = false;
+			if (ppBtn) ppBtn.textContent = "▶";
+		} else {
+			player.audio.play().catch(e => console.error("Playback failed:", e));
+			player.isPlaying = true;
+			if (ppBtn) ppBtn.textContent = "⏸";
+		}
+	}
+
+	private nextTrack() {
+		const player = window.vectrolaPlayer;
+		if (!player || !player.playlist.length) return;
+
+		if (player.shuffleMode) {
+			const unplayed = player.playlist.map((_, i) => i).filter(i => !player.shuffleHistory.includes(i));
+			if (unplayed.length === 0) {
+				player.shuffleHistory = [];
+				this.nextTrack();
+				return;
+			}
+			const randomIndex = unplayed[Math.floor(Math.random() * unplayed.length)];
+			this.playTrack(randomIndex);
+		} else {
+			this.playTrack((player.currentIndex + 1) % player.playlist.length);
+		}
+	}
+
+	private prevTrack() {
+		const player = window.vectrolaPlayer;
+		if (!player || !player.playlist.length) return;
+
+		if (player.shuffleMode && player.shuffleHistory.length > 1) {
+			player.shuffleHistory.pop();
+			this.playTrack(player.shuffleHistory[player.shuffleHistory.length - 1]);
+		} else {
+			this.playTrack(player.currentIndex <= 0 ? player.playlist.length - 1 : player.currentIndex - 1);
+		}
+	}
+
+	private toggleShuffle() {
+		const player = window.vectrolaPlayer;
+		if (!player) return;
+
+		player.shuffleMode = !player.shuffleMode;
+		const sBtn = document.getElementById("vectrola-shuffle-btn");
+		if (sBtn) sBtn.style.color = player.shuffleMode ? "var(--interactive-accent)" : "";
+		if (!player.shuffleMode) {
+			player.shuffleHistory = [];
+		} else if (player.currentIndex >= 0) {
+			player.shuffleHistory = [player.currentIndex];
+		}
+	}
+
+	private ensurePlayerBar() {
+		const player = window.vectrolaPlayer;
+		if (!player) return;
+
+		let playerBar = document.getElementById("vectrola-global-player");
+		if (playerBar) return; // Already exists
+
+		// Create player bar
+		playerBar = document.createElement("div");
+		playerBar.id = "vectrola-global-player";
+		playerBar.style.cssText = "position: fixed; bottom: 0; left: 0; right: 0; background: var(--background-secondary); border-top: 1px solid var(--background-modifier-border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; z-index: 1000; box-shadow: 0 -2px 10px rgba(0,0,0,0.1);";
+
+		// Track display
+		const trackDisplay = document.createElement("div");
+		trackDisplay.style.cssText = "flex: 1; min-width: 0;";
+
+		const trackTitleEl = document.createElement("div");
+		trackTitleEl.id = "vectrola-track-title";
+		trackTitleEl.style.cssText = "font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;";
+		trackTitleEl.textContent = player.currentTrack ? player.currentTrack.title : "Select a track to play";
+
+		const trackArtistEl = document.createElement("div");
+		trackArtistEl.id = "vectrola-track-artist";
+		trackArtistEl.style.cssText = "font-size: 0.85em; color: var(--text-muted);";
+		trackArtistEl.textContent = player.currentTrack ? player.currentTrack.artist : "";
+
+		trackDisplay.appendChild(trackTitleEl);
+		trackDisplay.appendChild(trackArtistEl);
+
+		// Controls
+		const controls = document.createElement("div");
+		controls.style.cssText = "display: flex; gap: 8px;";
+
+		const btnStyle = "background: none; border: none; font-size: 1.5em; cursor: pointer; padding: 8px; border-radius: 50%; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;";
+
+		const shuffleBtn = document.createElement("button");
+		shuffleBtn.id = "vectrola-shuffle-btn";
+		shuffleBtn.style.cssText = btnStyle;
+		shuffleBtn.textContent = "🔀";
+		shuffleBtn.title = "Shuffle";
+		if (player.shuffleMode) shuffleBtn.style.color = "var(--interactive-accent)";
+
+		const prevBtn = document.createElement("button");
+		prevBtn.style.cssText = btnStyle;
+		prevBtn.textContent = "⏮";
+		prevBtn.title = "Previous";
+
+		const playPauseBtn = document.createElement("button");
+		playPauseBtn.id = "vectrola-playpause-btn";
+		playPauseBtn.style.cssText = btnStyle;
+		playPauseBtn.textContent = player.isPlaying ? "⏸" : "▶";
+		playPauseBtn.title = "Play";
+
+		const nextBtn = document.createElement("button");
+		nextBtn.style.cssText = btnStyle;
+		nextBtn.textContent = "⏭";
+		nextBtn.title = "Next";
+
+		controls.appendChild(shuffleBtn);
+		controls.appendChild(prevBtn);
+		controls.appendChild(playPauseBtn);
+		controls.appendChild(nextBtn);
+
+		// Progress container
+		const progressContainer = document.createElement("div");
+		progressContainer.style.cssText = "flex: 2; display: flex; align-items: center; gap: 8px;";
+
+		const currentTimeEl = document.createElement("span");
+		currentTimeEl.id = "vectrola-current-time";
+		currentTimeEl.style.cssText = "font-size: 0.8em; color: var(--text-muted); min-width: 40px;";
+		currentTimeEl.textContent = "0:00";
+
+		const progressBarContainer = document.createElement("div");
+		progressBarContainer.id = "vectrola-progress-bar";
+		progressBarContainer.style.cssText = "flex: 1; height: 6px; background: var(--background-modifier-border); border-radius: 3px; cursor: pointer; position: relative;";
+
+		const progressFill = document.createElement("div");
+		progressFill.id = "vectrola-progress-fill";
+		progressFill.style.cssText = "height: 100%; background: var(--interactive-accent); border-radius: 3px; width: 0%; transition: width 0.1s linear;";
+		progressBarContainer.appendChild(progressFill);
+
+		const totalTimeEl = document.createElement("span");
+		totalTimeEl.id = "vectrola-total-time";
+		totalTimeEl.style.cssText = "font-size: 0.8em; color: var(--text-muted); min-width: 40px;";
+		totalTimeEl.textContent = "0:00";
+
+		progressContainer.appendChild(currentTimeEl);
+		progressContainer.appendChild(progressBarContainer);
+		progressContainer.appendChild(totalTimeEl);
+
+		// Assemble player bar
+		playerBar.appendChild(trackDisplay);
+		playerBar.appendChild(controls);
+		playerBar.appendChild(progressContainer);
+
+		// Append to body
+		document.body.appendChild(playerBar);
+
+		// Event listeners for controls
+		playPauseBtn.addEventListener("click", () => this.togglePlayPause());
+		nextBtn.addEventListener("click", () => this.nextTrack());
+		prevBtn.addEventListener("click", () => this.prevTrack());
+		shuffleBtn.addEventListener("click", () => this.toggleShuffle());
+
+		progressBarContainer.addEventListener("click", (e) => {
+			if (player.audio.duration) {
+				const rect = progressBarContainer.getBoundingClientRect();
+				const pos = (e.clientX - rect.left) / rect.width;
+				player.audio.currentTime = pos * player.audio.duration;
+			}
+		});
+
+		player.ui = { playerBar, trackTitleEl, trackArtistEl, playPauseBtn, shuffleBtn, progressFill, currentTimeEl, totalTimeEl };
 	}
 
 	// =========================================================================
