@@ -902,38 +902,57 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const container = document.createElement("div");
 		container.className = "vectrola-volume";
 
-		const volumeBtn = document.createElement("button");
-		volumeBtn.className = "vectrola-volume-btn";
-		volumeBtn.id = "vectrola-volume-btn";
-		volumeBtn.innerHTML = ICONS.volume;
-		volumeBtn.title = "Volume";
-
-		const popup = document.createElement("div");
-		popup.className = "vectrola-volume-popup";
-
+		// Horizontal slider (to the left of button)
 		const slider = document.createElement("input");
 		slider.type = "range";
 		slider.min = "0";
 		slider.max = "100";
-		slider.value = "100";
+		slider.value = String(Math.round((window.vectrolaPlayer?.volume ?? 1) * 100));
 		slider.className = "vectrola-volume-slider";
+		slider.id = "vectrola-volume-slider";
+
 		slider.addEventListener("input", (e) => {
 			const value = parseInt((e.target as HTMLInputElement).value);
 			if (window.vectrolaPlayer) {
 				window.vectrolaPlayer.audio.volume = value / 100;
 				window.vectrolaPlayer.volume = value / 100;
 			}
-			// Update icon based on volume
-			if (value === 0) {
-				volumeBtn.innerHTML = ICONS.volumeMute;
-			} else {
-				volumeBtn.innerHTML = ICONS.volume;
+			this.updateVolumeIcon(value);
+		});
+
+		// Prevent slider clicks from toggling visibility
+		slider.addEventListener("click", (e) => e.stopPropagation());
+
+		// Volume button
+		const volumeBtn = document.createElement("button");
+		volumeBtn.className = "vectrola-volume-btn";
+		volumeBtn.id = "vectrola-volume-btn";
+		volumeBtn.innerHTML = ICONS.volume;
+		volumeBtn.title = "Volume";
+
+		// Click to toggle slider visibility
+		volumeBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			container.classList.toggle("is-expanded");
+		});
+
+		// Click outside to close
+		document.addEventListener("click", (e) => {
+			if (!container.contains(e.target as Node)) {
+				container.classList.remove("is-expanded");
 			}
 		});
 
-		popup.appendChild(slider);
-		container.append(volumeBtn, popup);
+		// Order: slider first (left), then button (right)
+		container.append(slider, volumeBtn);
 		return container;
+	}
+
+	private updateVolumeIcon(value: number) {
+		const volumeBtn = document.getElementById("vectrola-volume-btn");
+		if (volumeBtn) {
+			volumeBtn.innerHTML = value === 0 ? ICONS.volumeMute : ICONS.volume;
+		}
 	}
 
 	private updateThumbnail(track: TrackInfo | null) {

@@ -416,12 +416,13 @@
 
 
 /* =========================================
-   Volume (Desktop Only)
+   Volume Control - Apple Music Style
    ========================================= */
 .vectrola-volume {
 	display: flex;
 	align-items: center;
 	flex-shrink: 0;
+	position: relative;
 }
 
 .vectrola-volume-btn {
@@ -437,6 +438,7 @@
 	color: var(--text-normal);
 	transition: all var(--vectrola-transition-fast);
 	padding: 0;
+	z-index: 2;
 }
 
 .vectrola-volume-btn:hover {
@@ -448,59 +450,57 @@
 	height: 20px;
 }
 
-/* Volume popup slider */
-.vectrola-volume-popup {
-	position: absolute;
-	bottom: 100%;
-	right: 0;
-	background: var(--vectrola-glass-bg);
-	backdrop-filter: blur(var(--vectrola-glass-blur));
-	-webkit-backdrop-filter: blur(var(--vectrola-glass-blur));
-	border: 1px solid var(--vectrola-glass-border);
-	border-radius: 8px;
-	padding: 16px 12px;
-	opacity: 0;
-	pointer-events: none;
-	transform: translateY(8px);
-	transition: opacity var(--vectrola-transition-fast), transform var(--vectrola-transition-fast);
-	z-index: 1001;
-}
-
-.vectrola-volume:hover .vectrola-volume-popup,
-.vectrola-volume-popup:hover {
-	opacity: 1;
-	pointer-events: auto;
-	transform: translateY(0);
-}
-
+/* Horizontal slider - hidden by default, appears on left */
 .vectrola-volume-slider {
-	width: 4px;
-	height: 80px;
+	width: 0;
+	height: 4px;
 	-webkit-appearance: none;
 	appearance: none;
 	background: rgba(255, 255, 255, 0.2);
 	border-radius: 2px;
 	cursor: pointer;
-	writing-mode: vertical-lr;
-	direction: rtl;
+	opacity: 0;
+	transition: width var(--vectrola-transition-fast), opacity var(--vectrola-transition-fast);
+	margin-right: 8px;
+}
+
+/* Expanded state - show slider */
+.vectrola-volume.is-expanded .vectrola-volume-slider {
+	width: 80px;
+	opacity: 1;
 }
 
 .vectrola-volume-slider::-webkit-slider-thumb {
 	-webkit-appearance: none;
-	width: 14px;
-	height: 14px;
-	background: var(--vectrola-accent);
+	width: 12px;
+	height: 12px;
+	background: white;
 	border-radius: 50%;
 	cursor: pointer;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .vectrola-volume-slider::-moz-range-thumb {
-	width: 14px;
-	height: 14px;
-	background: var(--vectrola-accent);
+	width: 12px;
+	height: 12px;
+	background: white;
 	border-radius: 50%;
-	border: none;
 	cursor: pointer;
+	border: none;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* Track styling */
+.vectrola-volume-slider::-webkit-slider-runnable-track {
+	height: 4px;
+	background: rgba(255, 255, 255, 0.2);
+	border-radius: 2px;
+}
+
+.vectrola-volume-slider::-moz-range-track {
+	height: 4px;
+	background: rgba(255, 255, 255, 0.2);
+	border-radius: 2px;
 }
 
 
