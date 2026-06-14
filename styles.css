@@ -19,19 +19,19 @@
 	color: var(--text-error);
 }
 
-/* Progress bar in Notice */
-.vectrola-progress-container {
+/* Progress bar in Notice (Sync UI) */
+.vectrola-sync-progress-container {
 	min-width: 220px;
 }
 
-.vectrola-progress-header {
+.vectrola-sync-progress-header {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
 	margin-bottom: 6px;
 }
 
-.vectrola-progress-label {
+.vectrola-sync-progress-label {
 	font-weight: 500;
 }
 
@@ -56,7 +56,7 @@
 	color: white;
 }
 
-.vectrola-progress-bar {
+.vectrola-sync-progress-bar {
 	height: 8px;
 	background: var(--background-modifier-border);
 	border-radius: 4px;
@@ -64,7 +64,7 @@
 	margin-bottom: 4px;
 }
 
-.vectrola-progress-fill {
+.vectrola-sync-progress-fill {
 	height: 100%;
 	background: var(--interactive-accent);
 	border-radius: 4px;
@@ -72,7 +72,7 @@
 	width: 0%;
 }
 
-.vectrola-progress-text {
+.vectrola-sync-progress-text {
 	font-size: 12px;
 	color: var(--text-muted);
 	text-align: right;
@@ -101,3 +101,960 @@
 	color: var(--text-muted);
 	font-size: 12px;
 }
+
+
+/* =========================================
+   VECTROLA PLAYER - Apple Music Style
+   ========================================= */
+
+/* CSS Custom Properties */
+:root {
+	/* Brand colors - RED accent */
+	--vectrola-accent: #E53935;
+	--vectrola-accent-hover: #F44336;
+	--vectrola-accent-glow: rgba(229, 57, 53, 0.4);
+	--vectrola-accent-light: rgba(229, 57, 53, 0.15);
+
+	/* Glass morphism */
+	--vectrola-glass-bg: rgba(30, 30, 30, 0.85);
+	--vectrola-glass-border: rgba(255, 255, 255, 0.1);
+	--vectrola-glass-blur: 20px;
+
+	/* Layout dimensions */
+	--vectrola-bar-height: 72px;
+	--vectrola-thumbnail-size: 48px;
+	--vectrola-thumbnail-size-mobile: 36px;
+	--vectrola-progress-height: 3px;
+	--vectrola-control-size: 36px;
+	--vectrola-control-size-mobile: 28px;
+	--vectrola-playpause-size: 44px;
+	--vectrola-playpause-size-mobile: 36px;
+
+	/* Transitions */
+	--vectrola-transition-fast: 150ms ease;
+	--vectrola-transition-medium: 250ms ease;
+	--vectrola-transition-slow: 400ms ease;
+}
+
+/* Light theme overrides */
+.theme-light {
+	--vectrola-glass-bg: rgba(255, 255, 255, 0.9);
+	--vectrola-glass-border: rgba(0, 0, 0, 0.1);
+}
+
+
+/* =========================================
+   Player Bar - Glass Morphism Container
+   ========================================= */
+.vectrola-player-bar {
+	position: fixed;
+	/* left, bottom, width set dynamically by JavaScript */
+
+	display: flex;
+	flex-direction: column;
+	min-height: var(--vectrola-bar-height);
+
+	/* Glass effect */
+	background: var(--vectrola-glass-bg);
+	backdrop-filter: blur(var(--vectrola-glass-blur));
+	-webkit-backdrop-filter: blur(var(--vectrola-glass-blur));
+	border: 1px solid var(--vectrola-glass-border);
+	border-radius: 12px;
+	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+
+	z-index: 1000;
+
+	/* Safe area for iOS handled in JS */
+}
+
+
+/* =========================================
+   Progress Bar - Top of Player
+   ========================================= */
+.vectrola-progress-container {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: var(--vectrola-progress-height);
+	background: rgba(255, 255, 255, 0.1);
+	cursor: pointer;
+	transition: height var(--vectrola-transition-fast), margin-top var(--vectrola-transition-fast);
+}
+
+.vectrola-progress-fill {
+	height: 100%;
+	background: var(--vectrola-accent);
+	width: 0%;
+	transition: width 100ms linear;
+	box-shadow: 0 0 6px var(--vectrola-accent-glow);
+}
+
+.vectrola-progress-container:hover {
+	height: 6px;
+}
+
+.vectrola-progress-container:hover .vectrola-progress-fill {
+	box-shadow: 0 0 10px var(--vectrola-accent-glow);
+}
+
+
+/* =========================================
+   Main Content Row
+   ========================================= */
+.vectrola-content {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 16px;
+	padding-top: calc(12px + var(--vectrola-progress-height));
+}
+
+
+/* =========================================
+   Controls (LEFT side)
+   ========================================= */
+.vectrola-controls {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-shrink: 0;
+}
+
+.vectrola-control-btn {
+	width: var(--vectrola-control-size);
+	height: var(--vectrola-control-size);
+	min-width: var(--vectrola-control-size);
+	min-height: var(--vectrola-control-size);
+	border: none;
+	background: transparent;
+	border-radius: 50%;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-normal);
+	transition: all var(--vectrola-transition-fast);
+	padding: 0;
+}
+
+.vectrola-control-btn:hover {
+	background: var(--vectrola-accent-light);
+	color: var(--vectrola-accent);
+}
+
+.vectrola-control-btn:active {
+	transform: scale(0.9);
+	background: var(--vectrola-accent);
+	color: white;
+}
+
+.vectrola-control-btn.is-active {
+	color: var(--vectrola-accent);
+}
+
+.vectrola-control-btn svg {
+	width: 18px;
+	height: 18px;
+}
+
+/* Play/Pause button - larger, prominent */
+.vectrola-playpause-btn {
+	width: var(--vectrola-playpause-size);
+	height: var(--vectrola-playpause-size);
+	min-width: var(--vectrola-playpause-size);
+	min-height: var(--vectrola-playpause-size);
+	background: var(--vectrola-accent);
+	color: white;
+}
+
+.vectrola-playpause-btn:hover {
+	background: var(--vectrola-accent-hover);
+	color: white;
+	transform: scale(1.05);
+}
+
+.vectrola-playpause-btn:active {
+	transform: scale(0.95);
+	background: var(--vectrola-accent);
+}
+
+.vectrola-playpause-btn svg {
+	width: 22px;
+	height: 22px;
+}
+
+
+/* =========================================
+   Thumbnail / Album Art
+   ========================================= */
+.vectrola-thumbnail {
+	width: var(--vectrola-thumbnail-size);
+	height: var(--vectrola-thumbnail-size);
+	min-width: var(--vectrola-thumbnail-size);
+	border-radius: 6px;
+	overflow: hidden;
+	flex-shrink: 0;
+	cursor: pointer;
+	position: relative;
+	transition: transform var(--vectrola-transition-fast);
+}
+
+.vectrola-thumbnail:hover {
+	transform: scale(1.05);
+}
+
+.vectrola-thumbnail img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+/* Mesh gradient fallback */
+.vectrola-thumbnail-gradient {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: rgba(255, 255, 255, 0.7);
+}
+
+.vectrola-thumbnail-gradient svg {
+	width: 24px;
+	height: 24px;
+}
+
+/* Playing animation on thumbnail */
+.vectrola-thumbnail.is-playing::after {
+	content: '';
+	position: absolute;
+	inset: -2px;
+	border: 2px solid var(--vectrola-accent);
+	border-radius: 8px;
+	animation: vectrola-pulse 2s ease-in-out infinite;
+	pointer-events: none;
+}
+
+
+/* =========================================
+   Track Info
+   ========================================= */
+.vectrola-track-info {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.vectrola-track-title {
+	font-weight: 600;
+	font-size: 14px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--text-normal);
+	line-height: 1.3;
+}
+
+.vectrola-track-title a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.vectrola-track-title a:hover {
+	color: var(--vectrola-accent);
+}
+
+/* Marquee container for artist */
+.vectrola-track-artist-container {
+	overflow: hidden;
+	position: relative;
+}
+
+.vectrola-track-artist {
+	font-size: 12px;
+	color: var(--text-muted);
+	white-space: nowrap;
+	display: inline-block;
+}
+
+/* Marquee animation when playing */
+.vectrola-track-artist-container.is-playing .vectrola-track-artist {
+	animation: vectrola-marquee 10s linear infinite;
+}
+
+.vectrola-track-artist-container.is-playing .vectrola-track-artist:hover {
+	animation-play-state: paused;
+}
+
+
+/* =========================================
+   Time Display
+   ========================================= */
+.vectrola-time {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+	flex-shrink: 0;
+}
+
+.vectrola-time-current {
+	min-width: 36px;
+	text-align: right;
+}
+
+.vectrola-time-separator {
+	color: var(--text-faint);
+}
+
+.vectrola-time-total {
+	min-width: 36px;
+}
+
+
+/* =========================================
+   Volume (Desktop Only)
+   ========================================= */
+.vectrola-volume {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+}
+
+.vectrola-volume-btn {
+	width: var(--vectrola-control-size);
+	height: var(--vectrola-control-size);
+	border: none;
+	background: transparent;
+	border-radius: 50%;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-normal);
+	transition: all var(--vectrola-transition-fast);
+	padding: 0;
+}
+
+.vectrola-volume-btn:hover {
+	color: var(--vectrola-accent);
+}
+
+.vectrola-volume-btn svg {
+	width: 20px;
+	height: 20px;
+}
+
+/* Volume popup slider */
+.vectrola-volume-popup {
+	position: absolute;
+	bottom: 100%;
+	right: 0;
+	background: var(--vectrola-glass-bg);
+	backdrop-filter: blur(var(--vectrola-glass-blur));
+	-webkit-backdrop-filter: blur(var(--vectrola-glass-blur));
+	border: 1px solid var(--vectrola-glass-border);
+	border-radius: 8px;
+	padding: 16px 12px;
+	opacity: 0;
+	pointer-events: none;
+	transform: translateY(8px);
+	transition: opacity var(--vectrola-transition-fast), transform var(--vectrola-transition-fast);
+	z-index: 1001;
+}
+
+.vectrola-volume:hover .vectrola-volume-popup,
+.vectrola-volume-popup:hover {
+	opacity: 1;
+	pointer-events: auto;
+	transform: translateY(0);
+}
+
+.vectrola-volume-slider {
+	width: 4px;
+	height: 80px;
+	-webkit-appearance: none;
+	appearance: none;
+	background: rgba(255, 255, 255, 0.2);
+	border-radius: 2px;
+	cursor: pointer;
+	writing-mode: vertical-lr;
+	direction: rtl;
+}
+
+.vectrola-volume-slider::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	width: 14px;
+	height: 14px;
+	background: var(--vectrola-accent);
+	border-radius: 50%;
+	cursor: pointer;
+}
+
+.vectrola-volume-slider::-moz-range-thumb {
+	width: 14px;
+	height: 14px;
+	background: var(--vectrola-accent);
+	border-radius: 50%;
+	border: none;
+	cursor: pointer;
+}
+
+
+/* =========================================
+   Overlay Card (Now Playing Expanded)
+   ========================================= */
+.vectrola-overlay-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.5);
+	z-index: 1001;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity var(--vectrola-transition-medium);
+}
+
+.vectrola-overlay-backdrop.is-visible {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.vectrola-overlay {
+	position: fixed;
+	z-index: 1002;
+	width: 300px;
+	max-width: calc(100vw - 32px);
+	background: var(--vectrola-glass-bg);
+	backdrop-filter: blur(24px);
+	-webkit-backdrop-filter: blur(24px);
+	border-radius: 16px;
+	border: 1px solid var(--vectrola-glass-border);
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+	padding: 20px;
+
+	/* Position set by JS */
+	opacity: 0;
+	transform: scale(0.95) translateY(10px);
+	pointer-events: none;
+	transition: opacity var(--vectrola-transition-medium),
+	            transform var(--vectrola-transition-medium);
+}
+
+.vectrola-overlay.is-visible {
+	opacity: 1;
+	transform: scale(1) translateY(0);
+	pointer-events: auto;
+}
+
+.vectrola-overlay-artwork {
+	width: 200px;
+	height: 200px;
+	margin: 0 auto 16px;
+	border-radius: 12px;
+	overflow: hidden;
+	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.vectrola-overlay-artwork img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.vectrola-overlay-info {
+	text-align: center;
+	margin-bottom: 16px;
+}
+
+.vectrola-overlay-title {
+	font-size: 18px;
+	font-weight: 600;
+	margin-bottom: 4px;
+	color: var(--text-normal);
+}
+
+.vectrola-overlay-artist {
+	font-size: 14px;
+	color: var(--text-muted);
+}
+
+.vectrola-overlay-controls {
+	display: flex;
+	justify-content: center;
+	gap: 8px;
+}
+
+.vectrola-overlay-controls .vectrola-control-btn {
+	width: 40px;
+	height: 40px;
+}
+
+.vectrola-overlay-controls .vectrola-playpause-btn {
+	width: 52px;
+	height: 52px;
+}
+
+.vectrola-overlay-controls .vectrola-playpause-btn svg {
+	width: 26px;
+	height: 26px;
+}
+
+
+/* =========================================
+   Animations
+   ========================================= */
+@keyframes vectrola-pulse {
+	0%, 100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.4;
+	}
+}
+
+@keyframes vectrola-marquee {
+	0% {
+		transform: translateX(0);
+	}
+	100% {
+		transform: translateX(-100%);
+	}
+}
+
+/* Click flash animation */
+@keyframes vectrola-click-flash {
+	0% {
+		background: var(--vectrola-accent);
+		color: white;
+	}
+	100% {
+		background: transparent;
+		color: var(--text-normal);
+	}
+}
+
+.vectrola-control-btn.is-clicked {
+	animation: vectrola-click-flash 0.3s ease;
+}
+
+
+/* =========================================
+   Mesh Gradient Backgrounds
+   ========================================= */
+.vectrola-gradient-melancholic {
+	background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+}
+
+.vectrola-gradient-romantic {
+	background: linear-gradient(135deg, #8e2de2 0%, #e63946 50%, #f4a261 100%);
+}
+
+.vectrola-gradient-upbeat {
+	background: linear-gradient(135deg, #f72585 0%, #7209b7 50%, #3a0ca3 100%);
+}
+
+.vectrola-gradient-chill {
+	background: linear-gradient(135deg, #90e0ef 0%, #00b4d8 50%, #0077b6 100%);
+}
+
+.vectrola-gradient-default {
+	background: linear-gradient(135deg, #2d3436 0%, #636e72 50%, #b2bec3 100%);
+}
+
+
+/* =========================================
+   Mobile Responsive
+   ========================================= */
+@media (max-width: 768px) {
+	.vectrola-thumbnail {
+		width: var(--vectrola-thumbnail-size-mobile);
+		height: var(--vectrola-thumbnail-size-mobile);
+		min-width: var(--vectrola-thumbnail-size-mobile);
+	}
+
+	.vectrola-control-btn {
+		width: var(--vectrola-control-size-mobile);
+		height: var(--vectrola-control-size-mobile);
+		min-width: var(--vectrola-control-size-mobile);
+		min-height: var(--vectrola-control-size-mobile);
+	}
+
+	.vectrola-control-btn svg {
+		width: 14px;
+		height: 14px;
+	}
+
+	.vectrola-playpause-btn {
+		width: var(--vectrola-playpause-size-mobile);
+		height: var(--vectrola-playpause-size-mobile);
+		min-width: var(--vectrola-playpause-size-mobile);
+		min-height: var(--vectrola-playpause-size-mobile);
+	}
+
+	.vectrola-playpause-btn svg {
+		width: 18px;
+		height: 18px;
+	}
+
+	.vectrola-volume {
+		display: none;
+	}
+
+	.vectrola-content {
+		padding: 8px 12px;
+		padding-top: calc(8px + var(--vectrola-progress-height));
+		gap: 8px;
+	}
+
+	.vectrola-controls {
+		gap: 2px;
+	}
+
+	.vectrola-track-title {
+		font-size: 13px;
+	}
+
+	.vectrola-track-artist {
+		font-size: 11px;
+	}
+
+	.vectrola-time {
+		font-size: 11px;
+	}
+
+	.vectrola-time-current,
+	.vectrola-time-total {
+		min-width: 28px;
+	}
+}
+
+/* Extra small screens */
+@media (max-width: 400px) {
+	.vectrola-time {
+		display: none;
+	}
+}
+
+
+/* =========================================
+   Page Header - Apple Music Style
+   ========================================= */
+.vectrola-page-header {
+	display: flex;
+	gap: 24px;
+	padding: 24px;
+	margin-bottom: 16px;
+}
+
+/* Large artwork with title overlay */
+.vectrola-header-artwork {
+	width: 200px;
+	height: 200px;
+	min-width: 200px;
+	border-radius: 8px;
+	overflow: hidden;
+	position: relative;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.vectrola-header-artwork img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+/* Title overlay on artwork */
+.vectrola-header-title-overlay {
+	position: absolute;
+	bottom: 12px;
+	left: 12px;
+	right: 12px;
+	color: white;
+	font-size: 20px;
+	font-weight: 700;
+	text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+	line-height: 1.2;
+}
+
+/* Info section (right of artwork) */
+.vectrola-header-info {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	padding-bottom: 8px;
+}
+
+.vectrola-header-name {
+	font-size: 28px;
+	font-weight: 700;
+	margin: 0 0 4px 0;
+}
+
+.vectrola-header-description {
+	font-size: 14px;
+	color: var(--text-muted);
+	margin: 0 0 16px 0;
+}
+
+/* Action buttons */
+.vectrola-header-actions {
+	display: flex;
+	gap: 12px;
+}
+
+.vectrola-header-btn {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 24px;
+	border-radius: 20px;
+	border: none;
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: all var(--vectrola-transition-fast);
+}
+
+.vectrola-header-btn svg {
+	width: 16px;
+	height: 16px;
+	fill: currentColor;
+	stroke: currentColor;
+}
+
+button.vectrola-header-btn.vectrola-header-btn-play {
+	background: rgba(255, 255, 255, 0.1);
+	color: #E53935;
+}
+
+button.vectrola-header-btn.vectrola-header-btn-play:hover {
+	background: rgba(255, 255, 255, 0.15);
+	transform: scale(1.02);
+}
+
+button.vectrola-header-btn.vectrola-header-btn-shuffle {
+	background: rgba(255, 255, 255, 0.1);
+	color: #E53935;
+}
+
+button.vectrola-header-btn.vectrola-header-btn-shuffle:hover {
+	background: rgba(255, 255, 255, 0.15);
+}
+
+/* Column headers for track list */
+.vectrola-list-header {
+	display: flex;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.vectrola-col-song {
+	flex: 2;
+}
+
+.vectrola-col-artist {
+	flex: 1;
+}
+
+.vectrola-col-album {
+	flex: 1;
+}
+
+.vectrola-col-time {
+	width: 60px;
+	text-align: right;
+}
+
+/* Mobile responsive - page header */
+@media (max-width: 600px) {
+	.vectrola-page-header {
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+	}
+
+	.vectrola-header-artwork {
+		width: 160px;
+		height: 160px;
+		min-width: 160px;
+	}
+
+	.vectrola-header-actions {
+		justify-content: center;
+	}
+
+	.vectrola-col-artist,
+	.vectrola-col-album {
+		display: none;
+	}
+}
+
+
+/* =========================================
+   Track List Styles (in markdown)
+   ========================================= */
+.vectrola-track-list {
+	margin: 16px 0;
+}
+
+.vectrola-track-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 12px;
+	margin: 4px 0;
+	border-radius: 8px;
+	cursor: pointer;
+	transition: background var(--vectrola-transition-fast);
+}
+
+.vectrola-track-row:hover {
+	background: var(--background-modifier-hover);
+}
+
+.vectrola-track-row.is-playing {
+	background: var(--vectrola-accent-light);
+}
+
+/* Thumbnail */
+.vectrola-track-row-thumbnail {
+	width: 40px;
+	height: 40px;
+	min-width: 40px;
+	border-radius: 4px;
+	overflow: hidden;
+	flex-shrink: 0;
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.vectrola-track-row-thumbnail img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.vectrola-track-row-thumbnail svg {
+	width: 20px;
+	height: 20px;
+	color: rgba(255, 255, 255, 0.7);
+}
+
+/* Equalizer Animation (shown when playing) */
+.vectrola-equalizer {
+	position: absolute;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.6);
+	display: none;
+	align-items: flex-end;
+	justify-content: center;
+	gap: 2px;
+	padding-bottom: 8px;
+}
+
+.vectrola-track-row.is-playing .vectrola-equalizer {
+	display: flex;
+}
+
+.vectrola-eq-bar {
+	width: 3px;
+	background: var(--vectrola-accent);
+	border-radius: 1px;
+	animation: vectrola-eq-bounce 0.5s ease-in-out infinite alternate;
+}
+
+.vectrola-eq-bar:nth-child(1) {
+	height: 8px;
+	animation-delay: 0s;
+}
+
+.vectrola-eq-bar:nth-child(2) {
+	height: 14px;
+	animation-delay: 0.2s;
+}
+
+.vectrola-eq-bar:nth-child(3) {
+	height: 10px;
+	animation-delay: 0.4s;
+}
+
+@keyframes vectrola-eq-bounce {
+	0% { transform: scaleY(0.3); }
+	100% { transform: scaleY(1); }
+}
+
+/* Track Info */
+.vectrola-track-row-info {
+	flex: 1;
+	min-width: 0;
+}
+
+.vectrola-track-row-title {
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vectrola-track-row.is-playing .vectrola-track-row-title {
+	color: var(--vectrola-accent);
+}
+
+.vectrola-track-row-subtitle {
+	font-size: 12px;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Duration */
+.vectrola-track-row-duration {
+	font-size: 12px;
+	color: var(--text-muted);
+	flex-shrink: 0;
+	font-variant-numeric: tabular-nums;
+	margin-right: 4px;
+}
+
+/* More Button (three dots) */
+.vectrola-track-row-more {
+	width: 28px;
+	height: 28px;
+	min-width: 28px;
+	border: none;
+	background: transparent;
+	border-radius: 50%;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-muted);
+	transition: background var(--vectrola-transition-fast), color var(--vectrola-transition-fast);
+	padding: 0;
+}
+
+.vectrola-track-row-more:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.vectrola-track-row-more svg {
+	width: 16px;
+	height: 16px;
+}
+
