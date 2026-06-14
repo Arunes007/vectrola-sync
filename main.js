@@ -244,6 +244,18 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
           volume: 1
         };
         window.vectrolaPlayer.audio.preload = "none";
+        const saved = localStorage.getItem("vectrola-last-track");
+        if (saved) {
+          try {
+            const data = JSON.parse(saved);
+            window.vectrolaPlayer.currentTrack = data.track;
+            window.vectrolaPlayer.currentIndex = data.index;
+            window.vectrolaPlayer.playlist = data.playlist || [];
+            window.vectrolaPlayer.playlistSource = data.playlistSource;
+          } catch (e) {
+            console.warn("Failed to restore last track:", e);
+          }
+        }
         this.setupAudioEventListeners();
       }
       const player = window.vectrolaPlayer;
@@ -396,6 +408,17 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         tt.textContent = this.formatTime(player.audio.duration);
     });
     player.audio.addEventListener("ended", () => this.nextTrack());
+    player.audio.addEventListener("pause", () => {
+      const saved = localStorage.getItem("vectrola-last-track");
+      if (saved && player.currentTrack) {
+        try {
+          const data = JSON.parse(saved);
+          data.position = player.audio.currentTime;
+          localStorage.setItem("vectrola-last-track", JSON.stringify(data));
+        } catch (e) {
+        }
+      }
+    });
   }
   formatTime(seconds) {
     if (isNaN(seconds))
@@ -474,6 +497,13 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       }
       player.currentIndex = index;
       player.currentTrack = track;
+      localStorage.setItem("vectrola-last-track", JSON.stringify({
+        track,
+        index,
+        playlist: player.playlist,
+        playlistSource: player.playlistSource,
+        position: 0
+      }));
       await player.audio.play();
       player.isPlaying = true;
       const titleEl = document.getElementById("vectrola-track-title");
@@ -521,6 +551,10 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       if (player.playlist.length > 0) {
         this.playTrack(0);
       }
+      return;
+    }
+    if (!player.audio.src && player.currentIndex >= 0 && player.playlist.length > 0) {
+      this.playTrack(player.currentIndex);
       return;
     }
     const ppBtn = document.getElementById("vectrola-playpause-btn");

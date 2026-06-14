@@ -289,6 +289,21 @@ export default class VectrolaSyncPlugin extends Plugin {
 				};
 				window.vectrolaPlayer.audio.preload = "none";
 
+				// Restore last played track from localStorage
+				const saved = localStorage.getItem('vectrola-last-track');
+				if (saved) {
+					try {
+						const data = JSON.parse(saved);
+						window.vectrolaPlayer.currentTrack = data.track;
+						window.vectrolaPlayer.currentIndex = data.index;
+						window.vectrolaPlayer.playlist = data.playlist || [];
+						window.vectrolaPlayer.playlistSource = data.playlistSource;
+						// Don't auto-play, just show the track info
+					} catch (e) {
+						console.warn('Failed to restore last track:', e);
+					}
+				}
+
 				// Set up audio event listeners (only once)
 				this.setupAudioEventListeners();
 			}
@@ -502,6 +517,20 @@ export default class VectrolaSyncPlugin extends Plugin {
 		});
 
 		player.audio.addEventListener("ended", () => this.nextTrack());
+
+		// Save position to localStorage on pause
+		player.audio.addEventListener("pause", () => {
+			const saved = localStorage.getItem('vectrola-last-track');
+			if (saved && player.currentTrack) {
+				try {
+					const data = JSON.parse(saved);
+					data.position = player.audio.currentTime;
+					localStorage.setItem('vectrola-last-track', JSON.stringify(data));
+				} catch (e) {
+					// Ignore
+				}
+			}
+		});
 	}
 
 	private formatTime(seconds: number): string {
@@ -590,6 +619,16 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			player.currentIndex = index;
 			player.currentTrack = track;
+
+			// Persist last played track to localStorage
+			localStorage.setItem('vectrola-last-track', JSON.stringify({
+				track: track,
+				index: index,
+				playlist: player.playlist,
+				playlistSource: player.playlistSource,
+				position: 0
+			}));
+
 			await player.audio.play();
 			player.isPlaying = true;
 
@@ -643,10 +682,17 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const player = window.vectrolaPlayer;
 		if (!player) return;
 
+		// If no track selected, play first track
 		if (player.currentIndex === -1) {
 			if (player.playlist.length > 0) {
 				this.playTrack(0);
 			}
+			return;
+		}
+
+		// If audio source not loaded (restored from localStorage), re-initialize track
+		if (!player.audio.src && player.currentIndex >= 0 && player.playlist.length > 0) {
+			this.playTrack(player.currentIndex);
 			return;
 		}
 
