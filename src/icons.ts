@@ -69,17 +69,32 @@ export const ICONS = {
 };
 
 /**
+ * Safely set SVG icon content on an element (avoids innerHTML warning)
+ * Uses DOMParser to safely parse trusted static SVG strings
+ */
+export function setIconContent(element: HTMLElement, iconName: keyof typeof ICONS): void {
+  element.replaceChildren(); // Clear existing content
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(ICONS[iconName], 'image/svg+xml');
+  const svg = doc.documentElement;
+  // Check for parse errors
+  if (svg.tagName === 'svg' && !doc.querySelector('parsererror')) {
+    element.appendChild(svg);
+  }
+}
+
+/**
  * Create an icon element from the ICONS object
  */
 export function createIcon(name: keyof typeof ICONS): HTMLSpanElement {
   const span = document.createElement("span");
   span.className = `vectrola-icon vectrola-icon-${name}`;
-  span.innerHTML = ICONS[name];
+  setIconContent(span, name);
   return span;
 }
 
 /**
- * Get raw SVG string for an icon
+ * Get raw SVG string for an icon (use only when innerHTML is unavoidable)
  */
 export function getIconSvg(name: keyof typeof ICONS): string {
   return ICONS[name];

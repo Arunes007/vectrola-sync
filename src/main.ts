@@ -10,7 +10,7 @@ import {
 	Platform,
 } from "obsidian";
 
-import { ICONS, createIcon } from "./icons";
+import { ICONS, createIcon, setIconContent } from "./icons";
 
 // =============================================================================
 // Constants
@@ -362,13 +362,15 @@ export default class VectrolaSyncPlugin extends Plugin {
 			// Play button
 			const playBtn = actionsEl.createEl("button");
 			playBtn.className = "vectrola-header-btn vectrola-header-btn-play";
-			playBtn.innerHTML = `${ICONS.play} Play`;
+			setIconContent(playBtn, 'play');
+			playBtn.appendChild(document.createTextNode(" Play"));
 			playBtn.addEventListener("click", () => playTrack(0));
 
 			// Shuffle button
 			const shuffleBtn = actionsEl.createEl("button");
 			shuffleBtn.className = "vectrola-header-btn vectrola-header-btn-shuffle";
-			shuffleBtn.innerHTML = `${ICONS.shuffle} Shuffle`;
+			setIconContent(shuffleBtn, 'shuffle');
+			shuffleBtn.appendChild(document.createTextNode(" Shuffle"));
 			shuffleBtn.addEventListener("click", () => {
 				player.shuffleMode = true;
 				player.shuffleHistory = [];
@@ -379,12 +381,18 @@ export default class VectrolaSyncPlugin extends Plugin {
 			// === TRACK LIST HEADER (Column titles) ===
 			const listHeader = container.createEl("div");
 			listHeader.className = "vectrola-list-header";
-			listHeader.innerHTML = `
-				<span class="vectrola-col-song">Song</span>
-				<span class="vectrola-col-artist">Artist</span>
-				<span class="vectrola-col-album">Album</span>
-				<span class="vectrola-col-time">Time</span>
-			`;
+			const colSong = listHeader.createEl("span");
+			colSong.className = "vectrola-col-song";
+			colSong.textContent = "Song";
+			const colArtist = listHeader.createEl("span");
+			colArtist.className = "vectrola-col-artist";
+			colArtist.textContent = "Artist";
+			const colAlbum = listHeader.createEl("span");
+			colAlbum.className = "vectrola-col-album";
+			colAlbum.textContent = "Album";
+			const colTime = listHeader.createEl("span");
+			colTime.className = "vectrola-col-time";
+			colTime.textContent = "Time";
 
 			// Build track list
 			const trackListEl = container.createEl("div");
@@ -414,7 +422,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 					img.alt = track.title;
 				} else {
 					thumb.addClass(this.getMoodGradient(track.mood));
-					thumb.innerHTML = ICONS.music;
+					setIconContent(thumb, 'music');
 				}
 
 				// Equalizer bars overlay (shown when playing)
@@ -443,7 +451,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				// More options button (three dots)
 				const moreBtn = row.createEl("button");
 				moreBtn.className = "vectrola-track-row-more";
-				moreBtn.innerHTML = ICONS.more;
+				setIconContent(moreBtn, 'more');
 				moreBtn.title = "Track details";
 				moreBtn.addEventListener("click", (e) => {
 					e.stopPropagation();
@@ -506,7 +514,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			const pf = document.getElementById("vectrola-progress-fill");
 			const ct = document.getElementById("vectrola-current-time");
 			if (player.audio.duration && pf && ct) {
-				pf.style.width = (player.audio.currentTime / player.audio.duration) * 100 + "%";
+				(pf as HTMLElement).setCssStyles({ width: (player.audio.currentTime / player.audio.duration) * 100 + "%" });
 				ct.textContent = this.formatTime(player.audio.currentTime);
 			}
 		});
@@ -640,7 +648,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			const artistContainer = document.querySelector(".vectrola-track-artist-container");
 
 			if (titleEl) {
-				titleEl.innerHTML = "";
+				titleEl.replaceChildren();
 				const link = document.createElement("a");
 				link.textContent = track.title;
 				link.href = "#";
@@ -653,7 +661,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				titleEl.appendChild(link);
 			}
 			if (artistEl) artistEl.textContent = track.artist;
-			if (ppBtn) ppBtn.innerHTML = ICONS.pause;
+			if (ppBtn) setIconContent(ppBtn, 'pause');
 
 			// Update thumbnail
 			this.updateThumbnail(track);
@@ -700,14 +708,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (player.isPlaying) {
 			player.audio.pause();
 			player.isPlaying = false;
-			if (ppBtn) ppBtn.innerHTML = ICONS.play;
+			if (ppBtn) setIconContent(ppBtn, 'play');
 			// Stop marquee animation
 			document.querySelector(".vectrola-track-artist-container")?.classList.remove("is-playing");
 			document.getElementById("vectrola-thumbnail")?.classList.remove("is-playing");
 		} else {
 			player.audio.play().catch(e => console.error("Playback failed:", e));
 			player.isPlaying = true;
-			if (ppBtn) ppBtn.innerHTML = ICONS.pause;
+			if (ppBtn) setIconContent(ppBtn, 'pause');
 			// Start marquee animation
 			document.querySelector(".vectrola-track-artist-container")?.classList.add("is-playing");
 			document.getElementById("vectrola-thumbnail")?.classList.add("is-playing");
@@ -794,9 +802,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 			rBtn.classList.toggle("is-active", player.repeatMode !== 'off');
 			// Update icon for repeat one
 			if (player.repeatMode === 'one') {
-				rBtn.innerHTML = ICONS.repeatOne;
+				setIconContent(rBtn, 'repeatOne');
 			} else {
-				rBtn.innerHTML = ICONS.repeat;
+				setIconContent(rBtn, 'repeat');
 			}
 			this.flashButton(rBtn);
 		}
@@ -887,17 +895,17 @@ export default class VectrolaSyncPlugin extends Plugin {
 			img.loading = "lazy";
 			img.onerror = () => {
 				// Fallback if image fails to load
-				container.innerHTML = "";
+				container.replaceChildren();
 				const gradient = document.createElement("div");
 				gradient.className = `vectrola-thumbnail-gradient ${this.getMoodGradient(track.mood)}`;
-				gradient.innerHTML = ICONS.music;
+				setIconContent(gradient, 'music');
 				container.appendChild(gradient);
 			};
 			container.appendChild(img);
 		} else {
 			const gradient = document.createElement("div");
 			gradient.className = `vectrola-thumbnail-gradient ${this.getMoodGradient(track?.mood)}`;
-			gradient.innerHTML = ICONS.music;
+			setIconContent(gradient, 'music');
 			container.appendChild(gradient);
 		}
 
@@ -908,7 +916,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const btn = document.createElement("button");
 		btn.className = `vectrola-control-btn${extraClass ? ` ${extraClass}` : ""}`;
 		if (id) btn.id = id;
-		btn.innerHTML = ICONS[iconName];
+		setIconContent(btn, iconName);
 		btn.addEventListener("click", () => this.flashButton(btn));
 		return btn;
 	}
@@ -986,7 +994,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const volumeBtn = document.createElement("button");
 		volumeBtn.className = "vectrola-volume-btn";
 		volumeBtn.id = "vectrola-volume-btn";
-		volumeBtn.innerHTML = ICONS.volume;
+		setIconContent(volumeBtn, 'volume');
 		volumeBtn.title = "Volume";
 
 		// Click to toggle slider visibility
@@ -1010,7 +1018,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 	private updateVolumeIcon(value: number) {
 		const volumeBtn = document.getElementById("vectrola-volume-btn");
 		if (volumeBtn) {
-			volumeBtn.innerHTML = value === 0 ? ICONS.volumeMute : ICONS.volume;
+			setIconContent(volumeBtn, value === 0 ? 'volumeMute' : 'volume');
 		}
 	}
 
@@ -1018,7 +1026,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const container = document.getElementById("vectrola-thumbnail");
 		if (!container) return;
 
-		container.innerHTML = "";
+		container.replaceChildren();
 		container.classList.remove("is-playing");
 
 		if (track?.artwork_url) {
@@ -1027,17 +1035,17 @@ export default class VectrolaSyncPlugin extends Plugin {
 			img.alt = track.title;
 			img.loading = "lazy";
 			img.onerror = () => {
-				container.innerHTML = "";
+				container.replaceChildren();
 				const gradient = document.createElement("div");
 				gradient.className = `vectrola-thumbnail-gradient ${this.getMoodGradient(track.mood)}`;
-				gradient.innerHTML = ICONS.music;
+				setIconContent(gradient, 'music');
 				container.appendChild(gradient);
 			};
 			container.appendChild(img);
 		} else {
 			const gradient = document.createElement("div");
 			gradient.className = `vectrola-thumbnail-gradient ${this.getMoodGradient(track?.mood)}`;
-			gradient.innerHTML = ICONS.music;
+			setIconContent(gradient, 'music');
 			container.appendChild(gradient);
 		}
 
@@ -1099,8 +1107,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const playerBar = document.getElementById("vectrola-global-player");
 		if (playerBar) {
 			const barRect = playerBar.getBoundingClientRect();
-			overlay.style.bottom = `${window.innerHeight - barRect.top + 16}px`;
-			overlay.style.left = `${Math.max(16, (window.innerWidth - 300) / 2)}px`;
+			(overlay as HTMLElement).setCssStyles({
+				bottom: `${window.innerHeight - barRect.top + 16}px`,
+				left: `${Math.max(16, (window.innerWidth - 300) / 2)}px`
+			});
 		}
 
 		// Show with animation
@@ -1144,11 +1154,18 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const artist = document.getElementById("vectrola-overlay-artist");
 
 		if (artwork) {
+			artwork.replaceChildren();
 			if (track.artwork_url) {
-				artwork.innerHTML = `<img src="${track.artwork_url}" alt="${track.title}">`;
+				const img = document.createElement("img");
+				img.src = track.artwork_url;
+				img.alt = track.title;
+				artwork.appendChild(img);
 			} else {
 				const gradient = this.getMoodGradient(track.mood);
-				artwork.innerHTML = `<div class="vectrola-thumbnail-gradient ${gradient}" style="width:100%;height:100%;font-size:48px;display:flex;align-items:center;justify-content:center;">${ICONS.music}</div>`;
+				const gradientDiv = document.createElement("div");
+				gradientDiv.className = `vectrola-thumbnail-gradient ${gradient} vectrola-overlay-gradient-fallback`;
+				setIconContent(gradientDiv, 'music');
+				artwork.appendChild(gradientDiv);
 			}
 		}
 
@@ -1170,10 +1187,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Set dynamic position (bottom, left, width)
 		const pos = this.calculatePlayerPosition();
-		playerBar.style.bottom = pos.bottom;
-		playerBar.style.left = pos.left;
-		playerBar.style.width = pos.width;
-		playerBar.style.right = 'auto'; // Use width instead of right
+		(playerBar as HTMLElement).setCssStyles({
+			bottom: pos.bottom,
+			left: pos.left,
+			width: pos.width,
+			right: 'auto' // Use width instead of right
+		});
 
 		// Progress bar at TOP
 		const progressContainer = document.createElement("div");
@@ -1289,9 +1308,11 @@ export default class VectrolaSyncPlugin extends Plugin {
 			const bar = document.getElementById("vectrola-global-player");
 			if (bar) {
 				const pos = this.calculatePlayerPosition();
-				bar.style.bottom = pos.bottom;
-				bar.style.left = pos.left;
-				bar.style.width = pos.width;
+				(bar as HTMLElement).setCssStyles({
+					bottom: pos.bottom,
+					left: pos.left,
+					width: pos.width
+				});
 			}
 		};
 
@@ -1714,7 +1735,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const pct = total > 0 ? Math.round((current / total) * 100) : 0;
 
 		label.textContent = `⬇️ ${this.syncStats.downloaded} ⏭️ ${this.syncStats.skipped}`;
-		progressFill.style.width = `${pct}%`;
+		(progressFill as HTMLElement).setCssStyles({ width: `${pct}%` });
 		progressText.textContent = `${current}/${total}`;
 	}
 

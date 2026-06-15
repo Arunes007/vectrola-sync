@@ -325,6 +325,16 @@
 	height: 24px;
 }
 
+/* Overlay artwork gradient fallback (larger icon) */
+.vectrola-overlay-gradient-fallback {
+	width: 100%;
+	height: 100%;
+	font-size: 48px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
 /* Playing animation on thumbnail */
 .vectrola-thumbnail.is-playing::after {
 	content: '';
