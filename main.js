@@ -87,9 +87,9 @@ var ICONS = {
 function setIconContent(element, iconName) {
   element.replaceChildren();
   const parser = new DOMParser();
-  const doc = parser.parseFromString(ICONS[iconName], "image/svg+xml");
-  const svg = doc.documentElement;
-  if (svg.tagName === "svg" && !doc.querySelector("parsererror")) {
+  const doc = parser.parseFromString(ICONS[iconName], "text/html");
+  const svg = doc.body.firstElementChild;
+  if (svg) {
     element.appendChild(svg);
   }
 }

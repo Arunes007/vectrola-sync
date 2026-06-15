@@ -70,15 +70,15 @@ export const ICONS = {
 
 /**
  * Safely set SVG icon content on an element (avoids innerHTML warning)
- * Uses DOMParser to safely parse trusted static SVG strings
+ * Uses DOMParser with text/html to correctly preserve SVG namespace
  */
 export function setIconContent(element: HTMLElement, iconName: keyof typeof ICONS): void {
   element.replaceChildren(); // Clear existing content
   const parser = new DOMParser();
-  const doc = parser.parseFromString(ICONS[iconName], 'image/svg+xml');
-  const svg = doc.documentElement;
-  // Check for parse errors
-  if (svg.tagName === 'svg' && !doc.querySelector('parsererror')) {
+  // Parse as HTML - this correctly creates SVG elements with proper namespace
+  const doc = parser.parseFromString(ICONS[iconName], 'text/html');
+  const svg = doc.body.firstElementChild;
+  if (svg) {
     element.appendChild(svg);
   }
 }
