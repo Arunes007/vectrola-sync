@@ -348,6 +348,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
           const track = playlist[i];
           const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
           row.classList.toggle("is-playing", !!isCurrentTrack);
+          row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
         });
       };
       playlist.forEach((track, i) => {

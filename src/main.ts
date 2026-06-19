@@ -426,6 +426,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 					const track = playlist[i];
 					const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
 					row.classList.toggle("is-playing", !!isCurrentTrack);
+					// Also toggle audio-playing based on whether audio is actually playing
+					row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
 				});
 			};
 
