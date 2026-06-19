@@ -19,7 +19,7 @@ import { ICONS, createIcon, setIconContent } from "./icons";
 const GOOGLE_CLIENT_ID = "212647824656-9h9gchm0msibletsog338miabe9qtbe1.apps.googleusercontent.com";
 const OAUTH_SERVER = "https://vectrola-oauth.up.railway.app";
 const REDIRECT_URI = `${OAUTH_SERVER}/callback`;
-const SCOPES = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file";
+const SCOPES = "https://www.googleapis.com/auth/drive.file";
 
 // =============================================================================
 // Types
@@ -30,12 +30,16 @@ interface VectrolaSyncSettings {
 	refreshToken: string;
 	tokenExpiry: number;
 	userEmail: string;
+	userId: string; // Vectrola user ID (e.g., "arunes007")
 	driveFolderPath: string;
 	autoSyncOnOpen: boolean;
 	syncIntervalMinutes: number;
 	lastSyncTime: number;
 	// Sync cache: maps relative path to md5 hash
 	syncCache: Record<string, string>;
+	// Google Picker selected folder
+	selectedFolderId: string;
+	selectedFolderName: string;
 }
 
 interface DriveFile {
@@ -55,8 +59,10 @@ interface TrackInfo {
 	album?: string;
 	duration?: string;
 	artwork_url?: string;
-	path: string;
-	gdrive_id?: string;
+	sources: {
+		local: Record<string, string>;  // hostname -> path
+		cloud: Record<string, { file_id: string; path: string }>;
+	};
 	track_id?: string;
 	link: string;
 	mood?: string;
@@ -91,11 +97,14 @@ const DEFAULT_SETTINGS: VectrolaSyncSettings = {
 	refreshToken: "",
 	tokenExpiry: 0,
 	userEmail: "",
+	userId: "", // Vectrola user ID
 	driveFolderPath: "/Vectrola/wiki",
 	autoSyncOnOpen: true,
-	syncIntervalMinutes: 5,
+	syncIntervalMinutes: 1440,
 	lastSyncTime: 0,
 	syncCache: {},
+	selectedFolderId: "",
+	selectedFolderName: "",
 };
 
 // =============================================================================
@@ -161,6 +170,11 @@ export default class VectrolaSyncPlugin extends Plugin {
 		// Register OAuth callback handler for obsidian://vectrola-auth
 		this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
 			this.handleOAuthCallback(params);
+		});
+
+		// Register Picker callback handler for obsidian://vectrola-picker
+		this.registerObsidianProtocolHandler("vectrola-picker", (params) => {
+			this.handlePickerCallback(params);
 		});
 
 		// Register vectrola code block processor for audio player
@@ -253,7 +267,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 	}
 
 	isAuthenticated(): boolean {
-		return !!(this.settings.accessToken && this.settings.refreshToken);
+		return !!(this.settings.accessToken && this.settings.refreshToken && this.settings.selectedFolderId);
+	}
+
+	// Has tokens but no folder selected (needs to complete picker)
+	hasTokensOnly(): boolean {
+		return !!(this.settings.accessToken && this.settings.refreshToken) && !this.settings.selectedFolderId;
 	}
 
 	// =========================================================================
@@ -374,6 +393,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 			shuffleBtn.addEventListener("click", () => {
 				player.shuffleMode = true;
 				player.shuffleHistory = [];
+				// Update player bar shuffle button
+				const sBtn = document.getElementById("vectrola-shuffle-btn");
+				if (sBtn) sBtn.classList.add("is-active");
 				const randomIndex = Math.floor(Math.random() * playlist.length);
 				playTrack(randomIndex);
 			});
@@ -402,7 +424,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			const updateLocalHighlight = () => {
 				trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
 					const track = playlist[i];
-					const isCurrentTrack = player.currentTrack && player.currentTrack.path === track.path;
+					const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
 					row.classList.toggle("is-playing", !!isCurrentTrack);
 				});
 			};
@@ -517,6 +539,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 				(pf as HTMLElement).setCssStyles({ width: (player.audio.currentTime / player.audio.duration) * 100 + "%" });
 				ct.textContent = this.formatTime(player.audio.currentTime);
 			}
+			// Update Media Session position state for lock screen progress bar
+			if ('mediaSession' in navigator && player.audio.duration) {
+				navigator.mediaSession.setPositionState({
+					duration: player.audio.duration,
+					playbackRate: player.audio.playbackRate,
+					position: player.audio.currentTime
+				});
+			}
 		});
 
 		player.audio.addEventListener("loadedmetadata", () => {
@@ -539,6 +569,27 @@ export default class VectrolaSyncPlugin extends Plugin {
 				}
 			}
 		});
+
+		// Media Session action handlers (lock screen controls)
+		if ('mediaSession' in navigator) {
+			navigator.mediaSession.setActionHandler('play', () => {
+				if (player.audio.paused) this.togglePlayPause();
+			});
+			navigator.mediaSession.setActionHandler('pause', () => {
+				if (!player.audio.paused) this.togglePlayPause();
+			});
+			navigator.mediaSession.setActionHandler('nexttrack', () => {
+				this.nextTrack();
+			});
+			navigator.mediaSession.setActionHandler('previoustrack', () => {
+				this.prevTrack();
+			});
+			navigator.mediaSession.setActionHandler('seekto', (details) => {
+				if (details.seekTime !== undefined && details.seekTime !== null) {
+					player.audio.currentTime = details.seekTime;
+				}
+			});
+		}
 	}
 
 	private formatTime(seconds: number): string {
@@ -553,6 +604,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (!player || index < 0 || index >= player.playlist.length) return;
 
 		const track = player.playlist[index];
+		const os = require("os");
+		const hostname = os.hostname();
 
 		try {
 			// Clean up previous blob URL if any
@@ -560,73 +613,131 @@ export default class VectrolaSyncPlugin extends Plugin {
 				URL.revokeObjectURL(player.audio.src);
 			}
 
-			// Try GDrive first, then fall back to local file
-			if (track.gdrive_id) {
-				console.log("Playing from GDrive:", track.gdrive_id);
+			// Resolve best playback source from sources schema
+			const sources = track.sources || { local: {}, cloud: {} };
+			let audioLoaded = false;
+
+			// Priority 1: Local file on current device
+			if (sources.local?.[hostname]) {
+				const localPath = sources.local[hostname];
+				try {
+					const fs = require("fs");
+					if (fs.existsSync(localPath)) {
+						const buffer = fs.readFileSync(localPath);
+						const blob = new Blob([buffer], { type: "audio/mpeg" });
+						player.audio.src = URL.createObjectURL(blob);
+						audioLoaded = true;
+						console.log("Playing from local (current device):", localPath);
+					}
+				} catch (e) {
+					console.warn("Local file not accessible:", e);
+				}
+			}
+
+			// Priority 2: Local file on any device (might work if path is accessible)
+			if (!audioLoaded && sources.local) {
+				for (const [device, path] of Object.entries(sources.local)) {
+					if (device === hostname) continue; // Already tried
+					try {
+						const fs = require("fs");
+						if (fs.existsSync(path as string)) {
+							const buffer = fs.readFileSync(path as string);
+							const blob = new Blob([buffer], { type: "audio/mpeg" });
+							player.audio.src = URL.createObjectURL(blob);
+							audioLoaded = true;
+							console.log(`Playing from local (${device}):`, path);
+							break;
+						}
+					} catch (e) {
+						// Path from another device, expected to fail
+					}
+				}
+			}
+
+			// Priority 3: Google Drive
+			if (!audioLoaded && sources.cloud?.gdrive?.file_id) {
+				const gdriveId = sources.cloud.gdrive.file_id;
+				console.log("Trying GDrive playback:", gdriveId);
 				try {
 					if (this.isAuthenticated()) {
-						const arrayBuffer = await this.fetchDriveFile(track.gdrive_id);
+						const arrayBuffer = await this.fetchDriveFile(gdriveId);
 						const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-						const blobUrl = URL.createObjectURL(blob);
-						player.audio.src = blobUrl;
-						console.log("Playing via plugin API");
+						player.audio.src = URL.createObjectURL(blob);
+						audioLoaded = true;
+						console.log("Playing from GDrive (plugin auth):", gdriveId);
 					} else {
 						// Fallback: Try CLI token
 						const fs = require("fs");
 						const path = require("path");
-						const os = require("os");
-
 						const tokenPath = path.join(os.homedir(), ".config", "vectrola", "gdrive_token.json");
-						const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
-						const accessToken = tokenData.token;
+						if (fs.existsSync(tokenPath)) {
+							const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+							const accessToken = tokenData.token;
 
-						const response = await fetch(
-							`https://www.googleapis.com/drive/v3/files/${track.gdrive_id}?alt=media`,
-							{ headers: { Authorization: `Bearer ${accessToken}` } }
-						);
+							const response = await fetch(
+								`https://www.googleapis.com/drive/v3/files/${gdriveId}?alt=media`,
+								{ headers: { Authorization: `Bearer ${accessToken}` } }
+							);
 
-						if (!response.ok) {
-							throw new Error(`GDrive fetch failed: ${response.status}`);
+							if (response.ok) {
+								const arrayBuffer = await response.arrayBuffer();
+								const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+								player.audio.src = URL.createObjectURL(blob);
+								audioLoaded = true;
+								console.log("Playing from GDrive (CLI token):", gdriveId);
+							}
 						}
-
-						const arrayBuffer = await response.arrayBuffer();
-						const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-						player.audio.src = URL.createObjectURL(blob);
-						console.log("Playing via CLI token");
 					}
 				} catch (gdriveError) {
-					console.error("GDrive playback failed, trying local:", gdriveError);
-					if (track.path) {
-						const fs = require("fs");
-						const buffer = fs.readFileSync(track.path);
-						const blob = new Blob([buffer], { type: "audio/mpeg" });
-						player.audio.src = URL.createObjectURL(blob);
-					} else {
-						throw gdriveError;
-					}
+					console.warn("GDrive playback failed:", gdriveError);
 				}
-			} else if (track.path) {
-				console.log("Playing from local:", track.path);
-				try {
-					const fs = require("fs");
-					const buffer = fs.readFileSync(track.path);
-					const blob = new Blob([buffer], { type: "audio/mpeg" });
-					const blobUrl = URL.createObjectURL(blob);
-					player.audio.src = blobUrl;
-				} catch (e) {
-					console.error("Local file not found:", track.path, e);
-					if (index + 1 < player.playlist.length) {
-						this.playTrack(index + 1);
-					}
-					return;
+			}
+
+			// No source found - show helpful message based on what sources exist
+			if (!audioLoaded) {
+				const hasLocalSources = Object.keys(sources.local || {}).length > 0;
+				const hasCloudSources = Object.keys(sources.cloud || {}).length > 0;
+
+				let message = `⚠️ Cannot play "${track.title}"\n`;
+
+				if (hasLocalSources && !hasCloudSources) {
+					// Has local paths from other devices but not this one
+					const devices = Object.keys(sources.local).join(", ");
+					message += `File exists on: ${devices}\n`;
+					message += `Re-ingest on this device: vectrola ingest <path>`;
+				} else if (hasCloudSources && !this.isAuthenticated()) {
+					// Has cloud sources but not authenticated
+					message += `Available on Google Drive.\n`;
+					message += `Sign in to Vectrola Sync to play.`;
+				} else if (!hasLocalSources && !hasCloudSources) {
+					// No sources at all - need to ingest
+					message += `No file path found.\n`;
+					message += `Run: vectrola ingest <path-to-file>`;
+				} else {
+					// Has sources but all failed
+					message += `File not accessible.\n`;
+					message += `Re-ingest: vectrola ingest <path>`;
 				}
-			} else {
-				console.warn("No playback source for track:", track.title);
+
+				new Notice(message, 5000);
 				return;
 			}
 
 			player.currentIndex = index;
 			player.currentTrack = track;
+
+			// Update Media Session metadata for lock screen controls
+			if ('mediaSession' in navigator) {
+				navigator.mediaSession.metadata = new MediaMetadata({
+					title: track.title,
+					artist: track.artist,
+					album: track.album || '',
+					artwork: track.artwork_url ? [
+						{ src: track.artwork_url, sizes: '512x512', type: 'image/jpeg' }
+					] : []
+				});
+				navigator.mediaSession.playbackState = 'playing';
+			}
 
 			// Persist last played track to localStorage
 			localStorage.setItem('vectrola-last-track', JSON.stringify({
@@ -678,11 +789,17 @@ export default class VectrolaSyncPlugin extends Plugin {
 			// Update all registered highlight updaters
 			window.vectrolaHighlightUpdaters?.forEach(fn => fn());
 
+			// Add audio-playing class to current track row for equalizer animation
+			document.querySelectorAll(".vectrola-track-row.is-playing").forEach(row => {
+				row.classList.add("audio-playing");
+			});
+
 			if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
 				player.shuffleHistory.push(index);
 			}
 		} catch (e) {
 			console.error("Playback failed:", e);
+			new Notice(`❌ Playback failed: ${(e as Error).message}`);
 		}
 	}
 
@@ -709,16 +826,32 @@ export default class VectrolaSyncPlugin extends Plugin {
 			player.audio.pause();
 			player.isPlaying = false;
 			if (ppBtn) setIconContent(ppBtn, 'play');
+			// Update Media Session playback state
+			if ('mediaSession' in navigator) {
+				navigator.mediaSession.playbackState = 'paused';
+			}
 			// Stop marquee animation
 			document.querySelector(".vectrola-track-artist-container")?.classList.remove("is-playing");
 			document.getElementById("vectrola-thumbnail")?.classList.remove("is-playing");
+			// Stop equalizer animation on track rows
+			document.querySelectorAll(".vectrola-track-row.is-playing").forEach(row => {
+				row.classList.remove("audio-playing");
+			});
 		} else {
 			player.audio.play().catch(e => console.error("Playback failed:", e));
 			player.isPlaying = true;
 			if (ppBtn) setIconContent(ppBtn, 'pause');
+			// Update Media Session playback state
+			if ('mediaSession' in navigator) {
+				navigator.mediaSession.playbackState = 'playing';
+			}
 			// Start marquee animation
 			document.querySelector(".vectrola-track-artist-container")?.classList.add("is-playing");
 			document.getElementById("vectrola-thumbnail")?.classList.add("is-playing");
+			// Start equalizer animation on track rows
+			document.querySelectorAll(".vectrola-track-row.is-playing").forEach(row => {
+				row.classList.add("audio-playing");
+			});
 		}
 	}
 
@@ -1191,7 +1324,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			bottom: pos.bottom,
 			left: pos.left,
 			width: pos.width,
-			right: 'auto' // Use width instead of right
+			right: 'auto'
 		});
 
 		// Progress bar at TOP
@@ -1303,14 +1436,111 @@ export default class VectrolaSyncPlugin extends Plugin {
 			totalTime,
 		};
 
-		// Update position on resize and orientation change
+		// =========================================
+		// Draggable player bar
+		// =========================================
+		let isDragging = false;
+		let dragOffset = { x: 0, y: 0 };
+		const bar = playerBar; // Capture non-null reference
+
+		// Non-interactive elements that allow dragging
+		const canDrag = (target: HTMLElement) => {
+			return !target.closest('button, input, .vectrola-progress-container, a');
+		};
+
+		bar.addEventListener('mousedown', (e) => {
+			if (!canDrag(e.target as HTMLElement)) return;
+
+			isDragging = true;
+			const rect = bar.getBoundingClientRect();
+			dragOffset.x = e.clientX - rect.left;
+			dragOffset.y = e.clientY - rect.top;
+			bar.classList.add('is-dragging');
+			e.preventDefault();
+		});
+
+		document.addEventListener('mousemove', (e) => {
+			if (!isDragging) return;
+
+			const x = e.clientX - dragOffset.x;
+			const y = e.clientY - dragOffset.y;
+
+			// Constrain to viewport
+			const maxX = window.innerWidth - bar.offsetWidth;
+			const maxY = window.innerHeight - bar.offsetHeight;
+
+			(bar as HTMLElement).setCssStyles({
+				left: `${Math.max(0, Math.min(x, maxX))}px`,
+				top: `${Math.max(0, Math.min(y, maxY))}px`,
+				bottom: 'auto'
+			});
+		});
+
+		document.addEventListener('mouseup', () => {
+			if (isDragging) {
+				isDragging = false;
+				bar.classList.remove('is-dragging');
+			}
+		});
+
+		// Touch support for mobile
+		bar.addEventListener('touchstart', (e) => {
+			if (!canDrag(e.target as HTMLElement)) return;
+
+			isDragging = true;
+			const touch = e.touches[0];
+			const rect = bar.getBoundingClientRect();
+			dragOffset.x = touch.clientX - rect.left;
+			dragOffset.y = touch.clientY - rect.top;
+			bar.classList.add('is-dragging');
+		}, { passive: true });
+
+		document.addEventListener('touchmove', (e) => {
+			if (!isDragging) return;
+
+			const touch = e.touches[0];
+			const x = touch.clientX - dragOffset.x;
+			const y = touch.clientY - dragOffset.y;
+
+			const maxX = window.innerWidth - bar.offsetWidth;
+			const maxY = window.innerHeight - bar.offsetHeight;
+
+			(bar as HTMLElement).setCssStyles({
+				left: `${Math.max(0, Math.min(x, maxX))}px`,
+				top: `${Math.max(0, Math.min(y, maxY))}px`,
+				bottom: 'auto'
+			});
+		}, { passive: true });
+
+		document.addEventListener('touchend', () => {
+			if (isDragging) {
+				isDragging = false;
+				bar.classList.remove('is-dragging');
+			}
+		});
+
+		// Double-click to reset position
+		bar.addEventListener('dblclick', (e) => {
+			if (!canDrag(e.target as HTMLElement)) return;
+
+			const pos = this.calculatePlayerPosition();
+			(bar as HTMLElement).setCssStyles({
+				bottom: pos.bottom,
+				left: pos.left,
+				top: '',
+				width: pos.width
+			});
+		});
+
+		// Update position on resize
 		const updatePosition = () => {
-			const bar = document.getElementById("vectrola-global-player");
-			if (bar) {
+			const barEl = document.getElementById("vectrola-global-player");
+			if (barEl) {
 				const pos = this.calculatePlayerPosition();
-				(bar as HTMLElement).setCssStyles({
+				(barEl as HTMLElement).setCssStyles({
 					bottom: pos.bottom,
 					left: pos.left,
+					top: '',
 					width: pos.width
 				});
 			}
@@ -1400,9 +1630,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return;
 		}
 
-		this.pendingAuthState = null;
+		// Don't clear pendingAuthState yet - we'll use it for picker too
 
 		if (error || !access_token) {
+			this.pendingAuthState = null;
 			new Notice(`❌ Authentication failed: ${error || "No token received"}`);
 			return;
 		}
@@ -1425,12 +1656,106 @@ export default class VectrolaSyncPlugin extends Plugin {
 		}
 
 		await this.saveSettings();
-		this.setupSyncInterval();
 
-		// Emit auth state change event
+		// If no folder selected yet, open picker
+		if (!this.settings.selectedFolderId) {
+			new Notice("🔐 Signed in! Now select your wiki folder...");
+			this.openFolderPicker();
+		} else {
+			// Already have folder, complete auth
+			this.pendingAuthState = null;
+			this.setupSyncInterval();
+			this.events.trigger("auth-state-changed");
+			new Notice("✅ Successfully connected to Google Drive!");
+		}
+	}
+
+	// Handle Picker callback from obsidian://vectrola-picker
+	private async handlePickerCallback(params: Record<string, string>) {
+		const { folder_id, folder_name, state, error } = params;
+
+		// Verify state
+		if (state && state !== this.pendingAuthState) {
+			console.error("Picker state mismatch:", { expected: this.pendingAuthState, received: state });
+			new Notice("❌ Folder selection failed: Invalid session. Please try again.");
+			return;
+		}
+
+		this.pendingAuthState = null;
+
+		if (error || !folder_id) {
+			new Notice(`❌ Folder selection failed: ${error || "No folder selected"}`);
+			return;
+		}
+
+		// Store selected folder
+		this.settings.selectedFolderId = folder_id;
+		this.settings.selectedFolderName = folder_name || "Selected Folder";
+		await this.saveSettings();
+
+		this.setupSyncInterval();
 		this.events.trigger("auth-state-changed");
 
-		new Notice("✅ Successfully connected to Google Drive!");
+		new Notice(`✅ Connected to folder: ${this.settings.selectedFolderName}`);
+	}
+
+	// Get user's GDrive file IDs from Qdrant (for picker pre-selection)
+	async getGdriveFileIds(): Promise<string[]> {
+		if (!this.settings.userId) {
+			return [];
+		}
+		try {
+			const response = await requestUrl({
+				url: `${OAUTH_SERVER}/user-files?user_id=${encodeURIComponent(this.settings.userId)}`,
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${this.settings.accessToken}`,
+				},
+			});
+			return response.json.file_ids || [];
+		} catch (e) {
+			console.warn("Could not fetch GDrive file IDs:", e);
+			return [];
+		}
+	}
+
+	// Open Google Picker to select folder
+	async openFolderPicker() {
+		// Generate a new state if not already pending (for standalone picker calls)
+		if (!this.pendingAuthState) {
+			this.pendingAuthState = generateRandomState();
+		}
+
+		// Get user's GDrive file IDs for pre-selection (grants access via drive.file scope)
+		let fileIds: string[] = [];
+		try {
+			fileIds = await this.getGdriveFileIds();
+			if (fileIds.length > 0) {
+				console.log(`Fetched ${fileIds.length} GDrive file IDs for picker`);
+			}
+		} catch (e) {
+			console.warn("Could not fetch file IDs:", e);
+		}
+
+		let pickerUrl = `${OAUTH_SERVER}/picker?` +
+			`access_token=${encodeURIComponent(this.settings.accessToken)}` +
+			`&state=${encodeURIComponent(this.pendingAuthState)}`;
+
+		if (fileIds.length > 0) {
+			pickerUrl += `&file_ids=${encodeURIComponent(fileIds.join(','))}`;
+		}
+
+		// Open as popup window (fixes third-party cookie issues)
+		const width = 800;
+		const height = 600;
+		const left = Math.round((screen.width - width) / 2);
+		const top = Math.round((screen.height - height) / 2);
+
+		window.open(
+			pickerUrl,
+			'vectrola-picker',
+			`width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`
+		);
 	}
 
 	async getUserInfo(accessToken: string): Promise<{ email?: string }> {
@@ -1491,6 +1816,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 		this.settings.refreshToken = "";
 		this.settings.tokenExpiry = 0;
 		this.settings.userEmail = "";
+		this.settings.selectedFolderId = "";
+		this.settings.selectedFolderName = "";
 		await this.saveSettings();
 
 		if (this.syncInterval) {
@@ -1745,6 +2072,13 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return;
 		}
 
+		// Check if folder is selected (required with drive.file scope)
+		if (!this.settings.selectedFolderId) {
+			new Notice("Please select a folder first.");
+			this.openFolderPicker();
+			return;
+		}
+
 		// If already syncing, just show the progress notice
 		if (this.isSyncing) {
 			this.showProgressNotice();
@@ -1762,11 +2096,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 		}
 
 		try {
-			// Find the Vectrola folder
-			if (this.noticeContent) {
-				this.noticeContent.label.textContent = `🔄 Finding folder...`;
-			}
-			const folderId = await this.findOrCreateFolder(this.settings.driveFolderPath);
+			// Use selected folder ID directly (from Google Picker)
+			const folderId = this.settings.selectedFolderId;
 
 			if (this.syncCancelled) { this.isSyncing = false; return; }
 
@@ -1900,10 +2231,18 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return;
 		}
 
+		// Check if folder is selected (required with drive.file scope)
+		if (!this.settings.selectedFolderId) {
+			new Notice("Please select a folder first.");
+			this.openFolderPicker();
+			return;
+		}
+
 		new Notice("Pushing to Google Drive...");
 
 		try {
-			const folderId = await this.findOrCreateFolder(this.settings.driveFolderPath);
+			// Use selected folder ID directly
+			const folderId = this.settings.selectedFolderId;
 
 			// Get all markdown files in vault
 			const files = this.app.vault.getMarkdownFiles();
@@ -1912,12 +2251,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 			for (const file of files) {
 				const content = await this.app.vault.read(file);
 
-				// Find parent folder in Drive
+				// Find parent folder in Drive (relative to selected folder)
 				const parentPath = file.parent?.path || "";
-				const driveParentPath = parentPath
-					? `${this.settings.driveFolderPath}/${parentPath}`
-					: this.settings.driveFolderPath;
-				const parentFolderId = await this.findOrCreateFolder(driveParentPath);
+				let parentFolderId = folderId;
+
+				if (parentPath) {
+					// Create nested folders within the selected folder
+					parentFolderId = await this.findOrCreateFolderInParent(folderId, parentPath);
+				}
 
 				// Check if file exists in Drive
 				const query = `name='${file.name}' and '${parentFolderId}' in parents and trashed=false`;
@@ -1938,6 +2279,41 @@ export default class VectrolaSyncPlugin extends Plugin {
 			console.error("Push failed:", error);
 			new Notice(`Push failed: ${error.message}`);
 		}
+	}
+
+	// Helper to create nested folders within a parent folder
+	async findOrCreateFolderInParent(parentFolderId: string, relativePath: string): Promise<string> {
+		const parts = relativePath.split("/").filter((p) => p);
+		let currentParentId = parentFolderId;
+
+		for (const part of parts) {
+			// Search for existing folder
+			const query = `name='${part}' and '${currentParentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+			const searchResult = await this.driveRequest(
+				`files?q=${encodeURIComponent(query)}&fields=files(id,name)`
+			);
+
+			if (searchResult.files && searchResult.files.length > 0) {
+				currentParentId = searchResult.files[0].id;
+			} else {
+				// Create folder
+				const metadata = {
+					name: part,
+					mimeType: "application/vnd.google-apps.folder",
+					parents: [currentParentId],
+				};
+
+				const created = await this.driveRequest(
+					"files?fields=id",
+					"POST",
+					JSON.stringify(metadata),
+					"application/json"
+				);
+				currentParentId = created.id;
+			}
+		}
+
+		return currentParentId;
 	}
 }
 
@@ -1992,6 +2368,38 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 							this.display();
 						})
 				);
+		} else if (this.plugin.hasTokensOnly()) {
+			// Partially authenticated - has tokens but no folder selected
+			const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
+			const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
+			statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "⚠️" });
+			const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
+			statusText.createEl("div", { cls: "vectrola-status-title", text: "Setup incomplete" });
+			statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Please select a folder to complete setup" });
+
+			new Setting(containerEl)
+				.setName("Select folder")
+				.setDesc("Choose the Google Drive folder to sync with")
+				.addButton((btn) =>
+					btn
+						.setButtonText("Select Folder")
+						.setCta()
+						.onClick(() => {
+							this.plugin.openFolderPicker();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Sign out")
+				.setDesc("Start over with a different account")
+				.addButton((btn) =>
+					btn
+						.setButtonText("Sign Out")
+						.onClick(async () => {
+							await this.plugin.signOut();
+							this.display();
+						})
+				);
 		} else {
 			const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
 			const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
@@ -2017,18 +2425,45 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 		// Sync Options
 		new Setting(containerEl).setName("Synchronization").setHeading();
 
+		// Vectrola User ID
 		new Setting(containerEl)
-			.setName("Drive folder path")
-			.setDesc("Google Drive folder where wiki is stored")
+			.setName("Vectrola User ID")
+			.setDesc("Your Vectrola username (from 'vectrola whoami')")
 			.addText((text) =>
 				text
-					.setPlaceholder("/Vectrola/wiki")
-					.setValue(this.plugin.settings.driveFolderPath)
+					.setPlaceholder("e.g., arunes007")
+					.setValue(this.plugin.settings.userId)
 					.onChange(async (value) => {
-						this.plugin.settings.driveFolderPath = value;
+						this.plugin.settings.userId = value;
 						await this.plugin.saveSettings();
 					})
 			);
+
+		// Show selected folder (from Picker)
+		if (this.plugin.settings.selectedFolderId) {
+			new Setting(containerEl)
+				.setName("Selected folder")
+				.setDesc(`Syncing with: ${this.plugin.settings.selectedFolderName}`)
+				.addButton((btn) =>
+					btn
+						.setButtonText("Change Folder")
+						.onClick(() => {
+							this.plugin.openFolderPicker();
+						})
+				);
+		} else if (this.plugin.isAuthenticated()) {
+			new Setting(containerEl)
+				.setName("Select folder")
+				.setDesc("Choose the Google Drive folder to sync with")
+				.addButton((btn) =>
+					btn
+						.setButtonText("Select Folder")
+						.setCta()
+						.onClick(() => {
+							this.plugin.openFolderPicker();
+						})
+				);
+		}
 
 		new Setting(containerEl)
 			.setName("Auto-sync on open")

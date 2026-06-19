@@ -164,7 +164,23 @@
 
 	z-index: 1000;
 
+	/* Draggable cursor */
+	cursor: grab;
+
 	/* Safe area for iOS handled in JS */
+}
+
+.vectrola-player-bar.is-dragging {
+	cursor: grabbing;
+	opacity: 0.9;
+}
+
+/* Restore pointer cursor for interactive elements */
+.vectrola-player-bar button,
+.vectrola-player-bar input,
+.vectrola-player-bar a,
+.vectrola-player-bar .vectrola-progress-container {
+	cursor: pointer;
 }
 
 
@@ -984,8 +1000,18 @@ button.vectrola-header-btn.vectrola-header-btn-shuffle:hover {
 	padding-bottom: 8px;
 }
 
-.vectrola-track-row.is-playing .vectrola-equalizer {
+.vectrola-track-row.is-playing.audio-playing .vectrola-equalizer {
 	display: flex;
+}
+
+/* Show static equalizer (paused) when track is selected but paused */
+.vectrola-track-row.is-playing:not(.audio-playing) .vectrola-equalizer {
+	display: flex;
+}
+
+.vectrola-track-row.is-playing:not(.audio-playing) .vectrola-eq-bar {
+	animation: none;
+	transform: scaleY(0.3);
 }
 
 .vectrola-eq-bar {

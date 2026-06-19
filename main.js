@@ -98,17 +98,21 @@ function setIconContent(element, iconName) {
 var GOOGLE_CLIENT_ID = "212647824656-9h9gchm0msibletsog338miabe9qtbe1.apps.googleusercontent.com";
 var OAUTH_SERVER = "https://vectrola-oauth.up.railway.app";
 var REDIRECT_URI = `${OAUTH_SERVER}/callback`;
-var SCOPES = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file";
+var SCOPES = "https://www.googleapis.com/auth/drive.file";
 var DEFAULT_SETTINGS = {
   accessToken: "",
   refreshToken: "",
   tokenExpiry: 0,
   userEmail: "",
+  userId: "",
+  // Vectrola user ID
   driveFolderPath: "/Vectrola/wiki",
   autoSyncOnOpen: true,
-  syncIntervalMinutes: 5,
+  syncIntervalMinutes: 1440,
   lastSyncTime: 0,
-  syncCache: {}
+  syncCache: {},
+  selectedFolderId: "",
+  selectedFolderName: ""
 };
 function generateCodeVerifier() {
   const array = new Uint8Array(32);
@@ -154,6 +158,9 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     await this.loadSettings();
     this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
       this.handleOAuthCallback(params);
+    });
+    this.registerObsidianProtocolHandler("vectrola-picker", (params) => {
+      this.handlePickerCallback(params);
     });
     this.registerMarkdownCodeBlockProcessor("vectrola", (source, el, ctx) => {
       this.renderVectrolaPlayer(source, el);
@@ -222,7 +229,11 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     }
   }
   isAuthenticated() {
-    return !!(this.settings.accessToken && this.settings.refreshToken);
+    return !!(this.settings.accessToken && this.settings.refreshToken && this.settings.selectedFolderId);
+  }
+  // Has tokens but no folder selected (needs to complete picker)
+  hasTokensOnly() {
+    return !!(this.settings.accessToken && this.settings.refreshToken) && !this.settings.selectedFolderId;
   }
   // =========================================================================
   // Vectrola Audio Player Renderer
@@ -310,6 +321,9 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       shuffleBtn.addEventListener("click", () => {
         player.shuffleMode = true;
         player.shuffleHistory = [];
+        const sBtn = document.getElementById("vectrola-shuffle-btn");
+        if (sBtn)
+          sBtn.classList.add("is-active");
         const randomIndex = Math.floor(Math.random() * playlist.length);
         playTrack(randomIndex);
       });
@@ -332,7 +346,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       const updateLocalHighlight = () => {
         trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
           const track = playlist[i];
-          const isCurrentTrack = player.currentTrack && player.currentTrack.path === track.path;
+          const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
           row.classList.toggle("is-playing", !!isCurrentTrack);
         });
       };
@@ -418,6 +432,13 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         pf.setCssStyles({ width: player.audio.currentTime / player.audio.duration * 100 + "%" });
         ct.textContent = this.formatTime(player.audio.currentTime);
       }
+      if ("mediaSession" in navigator && player.audio.duration) {
+        navigator.mediaSession.setPositionState({
+          duration: player.audio.duration,
+          playbackRate: player.audio.playbackRate,
+          position: player.audio.currentTime
+        });
+      }
     });
     player.audio.addEventListener("loadedmetadata", () => {
       const tt = document.getElementById("vectrola-total-time");
@@ -436,6 +457,27 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         }
       }
     });
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.setActionHandler("play", () => {
+        if (player.audio.paused)
+          this.togglePlayPause();
+      });
+      navigator.mediaSession.setActionHandler("pause", () => {
+        if (!player.audio.paused)
+          this.togglePlayPause();
+      });
+      navigator.mediaSession.setActionHandler("nexttrack", () => {
+        this.nextTrack();
+      });
+      navigator.mediaSession.setActionHandler("previoustrack", () => {
+        this.prevTrack();
+      });
+      navigator.mediaSession.setActionHandler("seekto", (details) => {
+        if (details.seekTime !== void 0 && details.seekTime !== null) {
+          player.audio.currentTime = details.seekTime;
+        }
+      });
+    }
   }
   formatTime(seconds) {
     if (isNaN(seconds))
@@ -445,75 +487,125 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   }
   async playTrack(index) {
-    var _a;
+    var _a, _b, _c, _d;
     const player = window.vectrolaPlayer;
     if (!player || index < 0 || index >= player.playlist.length)
       return;
     const track = player.playlist[index];
+    const os = require("os");
+    const hostname = os.hostname();
     try {
       if (player.audio.src && player.audio.src.startsWith("blob:")) {
         URL.revokeObjectURL(player.audio.src);
       }
-      if (track.gdrive_id) {
-        console.log("Playing from GDrive:", track.gdrive_id);
+      const sources = track.sources || { local: {}, cloud: {} };
+      let audioLoaded = false;
+      if ((_a = sources.local) == null ? void 0 : _a[hostname]) {
+        const localPath = sources.local[hostname];
+        try {
+          const fs = require("fs");
+          if (fs.existsSync(localPath)) {
+            const buffer = fs.readFileSync(localPath);
+            const blob = new Blob([buffer], { type: "audio/mpeg" });
+            player.audio.src = URL.createObjectURL(blob);
+            audioLoaded = true;
+            console.log("Playing from local (current device):", localPath);
+          }
+        } catch (e) {
+          console.warn("Local file not accessible:", e);
+        }
+      }
+      if (!audioLoaded && sources.local) {
+        for (const [device, path] of Object.entries(sources.local)) {
+          if (device === hostname)
+            continue;
+          try {
+            const fs = require("fs");
+            if (fs.existsSync(path)) {
+              const buffer = fs.readFileSync(path);
+              const blob = new Blob([buffer], { type: "audio/mpeg" });
+              player.audio.src = URL.createObjectURL(blob);
+              audioLoaded = true;
+              console.log(`Playing from local (${device}):`, path);
+              break;
+            }
+          } catch (e) {
+          }
+        }
+      }
+      if (!audioLoaded && ((_c = (_b = sources.cloud) == null ? void 0 : _b.gdrive) == null ? void 0 : _c.file_id)) {
+        const gdriveId = sources.cloud.gdrive.file_id;
+        console.log("Trying GDrive playback:", gdriveId);
         try {
           if (this.isAuthenticated()) {
-            const arrayBuffer = await this.fetchDriveFile(track.gdrive_id);
+            const arrayBuffer = await this.fetchDriveFile(gdriveId);
             const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-            const blobUrl = URL.createObjectURL(blob);
-            player.audio.src = blobUrl;
-            console.log("Playing via plugin API");
+            player.audio.src = URL.createObjectURL(blob);
+            audioLoaded = true;
+            console.log("Playing from GDrive (plugin auth):", gdriveId);
           } else {
             const fs = require("fs");
             const path = require("path");
-            const os = require("os");
             const tokenPath = path.join(os.homedir(), ".config", "vectrola", "gdrive_token.json");
-            const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
-            const accessToken = tokenData.token;
-            const response = await fetch(
-              `https://www.googleapis.com/drive/v3/files/${track.gdrive_id}?alt=media`,
-              { headers: { Authorization: `Bearer ${accessToken}` } }
-            );
-            if (!response.ok) {
-              throw new Error(`GDrive fetch failed: ${response.status}`);
+            if (fs.existsSync(tokenPath)) {
+              const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+              const accessToken = tokenData.token;
+              const response = await fetch(
+                `https://www.googleapis.com/drive/v3/files/${gdriveId}?alt=media`,
+                { headers: { Authorization: `Bearer ${accessToken}` } }
+              );
+              if (response.ok) {
+                const arrayBuffer = await response.arrayBuffer();
+                const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+                player.audio.src = URL.createObjectURL(blob);
+                audioLoaded = true;
+                console.log("Playing from GDrive (CLI token):", gdriveId);
+              }
             }
-            const arrayBuffer = await response.arrayBuffer();
-            const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-            player.audio.src = URL.createObjectURL(blob);
-            console.log("Playing via CLI token");
           }
         } catch (gdriveError) {
-          console.error("GDrive playback failed, trying local:", gdriveError);
-          if (track.path) {
-            const fs = require("fs");
-            const buffer = fs.readFileSync(track.path);
-            const blob = new Blob([buffer], { type: "audio/mpeg" });
-            player.audio.src = URL.createObjectURL(blob);
-          } else {
-            throw gdriveError;
-          }
+          console.warn("GDrive playback failed:", gdriveError);
         }
-      } else if (track.path) {
-        console.log("Playing from local:", track.path);
-        try {
-          const fs = require("fs");
-          const buffer = fs.readFileSync(track.path);
-          const blob = new Blob([buffer], { type: "audio/mpeg" });
-          const blobUrl = URL.createObjectURL(blob);
-          player.audio.src = blobUrl;
-        } catch (e) {
-          console.error("Local file not found:", track.path, e);
-          if (index + 1 < player.playlist.length) {
-            this.playTrack(index + 1);
-          }
-          return;
+      }
+      if (!audioLoaded) {
+        const hasLocalSources = Object.keys(sources.local || {}).length > 0;
+        const hasCloudSources = Object.keys(sources.cloud || {}).length > 0;
+        let message = `\u26A0\uFE0F Cannot play "${track.title}"
+`;
+        if (hasLocalSources && !hasCloudSources) {
+          const devices = Object.keys(sources.local).join(", ");
+          message += `File exists on: ${devices}
+`;
+          message += `Re-ingest on this device: vectrola ingest <path>`;
+        } else if (hasCloudSources && !this.isAuthenticated()) {
+          message += `Available on Google Drive.
+`;
+          message += `Sign in to Vectrola Sync to play.`;
+        } else if (!hasLocalSources && !hasCloudSources) {
+          message += `No file path found.
+`;
+          message += `Run: vectrola ingest <path-to-file>`;
+        } else {
+          message += `File not accessible.
+`;
+          message += `Re-ingest: vectrola ingest <path>`;
         }
-      } else {
-        console.warn("No playback source for track:", track.title);
+        new import_obsidian.Notice(message, 5e3);
         return;
       }
       player.currentIndex = index;
       player.currentTrack = track;
+      if ("mediaSession" in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.title,
+          artist: track.artist,
+          album: track.album || "",
+          artwork: track.artwork_url ? [
+            { src: track.artwork_url, sizes: "512x512", type: "image/jpeg" }
+          ] : []
+        });
+        navigator.mediaSession.playbackState = "playing";
+      }
       localStorage.setItem("vectrola-last-track", JSON.stringify({
         track,
         index,
@@ -551,12 +643,16 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       if (player.overlayVisible) {
         this.updateOverlayContent();
       }
-      (_a = window.vectrolaHighlightUpdaters) == null ? void 0 : _a.forEach((fn) => fn());
+      (_d = window.vectrolaHighlightUpdaters) == null ? void 0 : _d.forEach((fn) => fn());
+      document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
+        row.classList.add("audio-playing");
+      });
       if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
         player.shuffleHistory.push(index);
       }
     } catch (e) {
       console.error("Playback failed:", e);
+      new import_obsidian.Notice(`\u274C Playback failed: ${e.message}`);
     }
   }
   togglePlayPause() {
@@ -580,15 +676,27 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       player.isPlaying = false;
       if (ppBtn)
         setIconContent(ppBtn, "play");
+      if ("mediaSession" in navigator) {
+        navigator.mediaSession.playbackState = "paused";
+      }
       (_a = document.querySelector(".vectrola-track-artist-container")) == null ? void 0 : _a.classList.remove("is-playing");
       (_b = document.getElementById("vectrola-thumbnail")) == null ? void 0 : _b.classList.remove("is-playing");
+      document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
+        row.classList.remove("audio-playing");
+      });
     } else {
       player.audio.play().catch((e) => console.error("Playback failed:", e));
       player.isPlaying = true;
       if (ppBtn)
         setIconContent(ppBtn, "pause");
+      if ("mediaSession" in navigator) {
+        navigator.mediaSession.playbackState = "playing";
+      }
       (_c = document.querySelector(".vectrola-track-artist-container")) == null ? void 0 : _c.classList.add("is-playing");
       (_d = document.getElementById("vectrola-thumbnail")) == null ? void 0 : _d.classList.add("is-playing");
+      document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
+        row.classList.add("audio-playing");
+      });
     }
   }
   nextTrack() {
@@ -982,7 +1090,6 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       left: pos.left,
       width: pos.width,
       right: "auto"
-      // Use width instead of right
     });
     const progressContainer = document.createElement("div");
     progressContainer.className = "vectrola-progress-container";
@@ -1063,13 +1170,90 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       currentTime,
       totalTime
     };
+    let isDragging = false;
+    let dragOffset = { x: 0, y: 0 };
+    const bar = playerBar;
+    const canDrag = (target) => {
+      return !target.closest("button, input, .vectrola-progress-container, a");
+    };
+    bar.addEventListener("mousedown", (e) => {
+      if (!canDrag(e.target))
+        return;
+      isDragging = true;
+      const rect = bar.getBoundingClientRect();
+      dragOffset.x = e.clientX - rect.left;
+      dragOffset.y = e.clientY - rect.top;
+      bar.classList.add("is-dragging");
+      e.preventDefault();
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!isDragging)
+        return;
+      const x = e.clientX - dragOffset.x;
+      const y = e.clientY - dragOffset.y;
+      const maxX = window.innerWidth - bar.offsetWidth;
+      const maxY = window.innerHeight - bar.offsetHeight;
+      bar.setCssStyles({
+        left: `${Math.max(0, Math.min(x, maxX))}px`,
+        top: `${Math.max(0, Math.min(y, maxY))}px`,
+        bottom: "auto"
+      });
+    });
+    document.addEventListener("mouseup", () => {
+      if (isDragging) {
+        isDragging = false;
+        bar.classList.remove("is-dragging");
+      }
+    });
+    bar.addEventListener("touchstart", (e) => {
+      if (!canDrag(e.target))
+        return;
+      isDragging = true;
+      const touch = e.touches[0];
+      const rect = bar.getBoundingClientRect();
+      dragOffset.x = touch.clientX - rect.left;
+      dragOffset.y = touch.clientY - rect.top;
+      bar.classList.add("is-dragging");
+    }, { passive: true });
+    document.addEventListener("touchmove", (e) => {
+      if (!isDragging)
+        return;
+      const touch = e.touches[0];
+      const x = touch.clientX - dragOffset.x;
+      const y = touch.clientY - dragOffset.y;
+      const maxX = window.innerWidth - bar.offsetWidth;
+      const maxY = window.innerHeight - bar.offsetHeight;
+      bar.setCssStyles({
+        left: `${Math.max(0, Math.min(x, maxX))}px`,
+        top: `${Math.max(0, Math.min(y, maxY))}px`,
+        bottom: "auto"
+      });
+    }, { passive: true });
+    document.addEventListener("touchend", () => {
+      if (isDragging) {
+        isDragging = false;
+        bar.classList.remove("is-dragging");
+      }
+    });
+    bar.addEventListener("dblclick", (e) => {
+      if (!canDrag(e.target))
+        return;
+      const pos2 = this.calculatePlayerPosition();
+      bar.setCssStyles({
+        bottom: pos2.bottom,
+        left: pos2.left,
+        top: "",
+        width: pos2.width
+      });
+    });
     const updatePosition = () => {
-      const bar = document.getElementById("vectrola-global-player");
-      if (bar) {
+      const barEl = document.getElementById("vectrola-global-player");
+      if (barEl) {
         const pos2 = this.calculatePlayerPosition();
-        bar.setCssStyles({
+        barEl.setCssStyles({
           bottom: pos2.bottom,
           left: pos2.left,
+          top: "",
           width: pos2.width
         });
       }
@@ -1126,8 +1310,8 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       new import_obsidian.Notice("\u274C Authentication failed: Invalid session. Please try again.");
       return;
     }
-    this.pendingAuthState = null;
     if (error || !access_token) {
+      this.pendingAuthState = null;
       new import_obsidian.Notice(`\u274C Authentication failed: ${error || "No token received"}`);
       return;
     }
@@ -1144,9 +1328,82 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     } catch (e) {
     }
     await this.saveSettings();
+    if (!this.settings.selectedFolderId) {
+      new import_obsidian.Notice("\u{1F510} Signed in! Now select your wiki folder...");
+      this.openFolderPicker();
+    } else {
+      this.pendingAuthState = null;
+      this.setupSyncInterval();
+      this.events.trigger("auth-state-changed");
+      new import_obsidian.Notice("\u2705 Successfully connected to Google Drive!");
+    }
+  }
+  // Handle Picker callback from obsidian://vectrola-picker
+  async handlePickerCallback(params) {
+    const { folder_id, folder_name, state, error } = params;
+    if (state && state !== this.pendingAuthState) {
+      console.error("Picker state mismatch:", { expected: this.pendingAuthState, received: state });
+      new import_obsidian.Notice("\u274C Folder selection failed: Invalid session. Please try again.");
+      return;
+    }
+    this.pendingAuthState = null;
+    if (error || !folder_id) {
+      new import_obsidian.Notice(`\u274C Folder selection failed: ${error || "No folder selected"}`);
+      return;
+    }
+    this.settings.selectedFolderId = folder_id;
+    this.settings.selectedFolderName = folder_name || "Selected Folder";
+    await this.saveSettings();
     this.setupSyncInterval();
     this.events.trigger("auth-state-changed");
-    new import_obsidian.Notice("\u2705 Successfully connected to Google Drive!");
+    new import_obsidian.Notice(`\u2705 Connected to folder: ${this.settings.selectedFolderName}`);
+  }
+  // Get user's GDrive file IDs from Qdrant (for picker pre-selection)
+  async getGdriveFileIds() {
+    if (!this.settings.userId) {
+      return [];
+    }
+    try {
+      const response = await (0, import_obsidian.requestUrl)({
+        url: `${OAUTH_SERVER}/user-files?user_id=${encodeURIComponent(this.settings.userId)}`,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${this.settings.accessToken}`
+        }
+      });
+      return response.json.file_ids || [];
+    } catch (e) {
+      console.warn("Could not fetch GDrive file IDs:", e);
+      return [];
+    }
+  }
+  // Open Google Picker to select folder
+  async openFolderPicker() {
+    if (!this.pendingAuthState) {
+      this.pendingAuthState = generateRandomState();
+    }
+    let fileIds = [];
+    try {
+      fileIds = await this.getGdriveFileIds();
+      if (fileIds.length > 0) {
+        console.log(`Fetched ${fileIds.length} GDrive file IDs for picker`);
+      }
+    } catch (e) {
+      console.warn("Could not fetch file IDs:", e);
+    }
+    let pickerUrl = `${OAUTH_SERVER}/picker?access_token=${encodeURIComponent(this.settings.accessToken)}&state=${encodeURIComponent(this.pendingAuthState)}`;
+    if (fileIds.length > 0) {
+      pickerUrl += `&file_ids=${encodeURIComponent(fileIds.join(","))}`;
+    }
+    const width = 800;
+    const height = 600;
+    const left = Math.round((screen.width - width) / 2);
+    const top = Math.round((screen.height - height) / 2);
+    window.open(
+      pickerUrl,
+      "vectrola-picker",
+      `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`
+    );
   }
   async getUserInfo(accessToken) {
     const response = await (0, import_obsidian.requestUrl)({
@@ -1197,6 +1454,8 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     this.settings.refreshToken = "";
     this.settings.tokenExpiry = 0;
     this.settings.userEmail = "";
+    this.settings.selectedFolderId = "";
+    this.settings.selectedFolderName = "";
     await this.saveSettings();
     if (this.syncInterval) {
       window.clearInterval(this.syncInterval);
@@ -1373,6 +1632,11 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       new import_obsidian.Notice("Please sign in with Google Drive first.");
       return;
     }
+    if (!this.settings.selectedFolderId) {
+      new import_obsidian.Notice("Please select a folder first.");
+      this.openFolderPicker();
+      return;
+    }
     if (this.isSyncing) {
       this.showProgressNotice();
       return;
@@ -1385,10 +1649,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       this.noticeContent.label.textContent = "\u{1F504} Connecting...";
     }
     try {
-      if (this.noticeContent) {
-        this.noticeContent.label.textContent = `\u{1F504} Finding folder...`;
-      }
-      const folderId = await this.findOrCreateFolder(this.settings.driveFolderPath);
+      const folderId = this.settings.selectedFolderId;
       if (this.syncCancelled) {
         this.isSyncing = false;
         return;
@@ -1503,16 +1764,23 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       new import_obsidian.Notice("Please sign in with Google Drive first.");
       return;
     }
+    if (!this.settings.selectedFolderId) {
+      new import_obsidian.Notice("Please select a folder first.");
+      this.openFolderPicker();
+      return;
+    }
     new import_obsidian.Notice("Pushing to Google Drive...");
     try {
-      const folderId = await this.findOrCreateFolder(this.settings.driveFolderPath);
+      const folderId = this.settings.selectedFolderId;
       const files = this.app.vault.getMarkdownFiles();
       let uploaded = 0;
       for (const file of files) {
         const content = await this.app.vault.read(file);
         const parentPath = ((_a = file.parent) == null ? void 0 : _a.path) || "";
-        const driveParentPath = parentPath ? `${this.settings.driveFolderPath}/${parentPath}` : this.settings.driveFolderPath;
-        const parentFolderId = await this.findOrCreateFolder(driveParentPath);
+        let parentFolderId = folderId;
+        if (parentPath) {
+          parentFolderId = await this.findOrCreateFolderInParent(folderId, parentPath);
+        }
         const query = `name='${file.name}' and '${parentFolderId}' in parents and trashed=false`;
         const existing = await this.driveRequest(
           `files?q=${encodeURIComponent(query)}&fields=files(id)`
@@ -1528,6 +1796,34 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       console.error("Push failed:", error);
       new import_obsidian.Notice(`Push failed: ${error.message}`);
     }
+  }
+  // Helper to create nested folders within a parent folder
+  async findOrCreateFolderInParent(parentFolderId, relativePath) {
+    const parts = relativePath.split("/").filter((p) => p);
+    let currentParentId = parentFolderId;
+    for (const part of parts) {
+      const query = `name='${part}' and '${currentParentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+      const searchResult = await this.driveRequest(
+        `files?q=${encodeURIComponent(query)}&fields=files(id,name)`
+      );
+      if (searchResult.files && searchResult.files.length > 0) {
+        currentParentId = searchResult.files[0].id;
+      } else {
+        const metadata = {
+          name: part,
+          mimeType: "application/vnd.google-apps.folder",
+          parents: [currentParentId]
+        };
+        const created = await this.driveRequest(
+          "files?fields=id",
+          "POST",
+          JSON.stringify(metadata),
+          "application/json"
+        );
+        currentParentId = created.id;
+      }
+    }
+    return currentParentId;
   }
 };
 var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -1559,6 +1855,24 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
           this.display();
         })
       );
+    } else if (this.plugin.hasTokensOnly()) {
+      const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
+      const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
+      statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "\u26A0\uFE0F" });
+      const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
+      statusText.createEl("div", { cls: "vectrola-status-title", text: "Setup incomplete" });
+      statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Please select a folder to complete setup" });
+      new import_obsidian.Setting(containerEl).setName("Select folder").setDesc("Choose the Google Drive folder to sync with").addButton(
+        (btn) => btn.setButtonText("Select Folder").setCta().onClick(() => {
+          this.plugin.openFolderPicker();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Sign out").setDesc("Start over with a different account").addButton(
+        (btn) => btn.setButtonText("Sign Out").onClick(async () => {
+          await this.plugin.signOut();
+          this.display();
+        })
+      );
     } else {
       const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
       const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
@@ -1574,12 +1888,25 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
       );
     }
     new import_obsidian.Setting(containerEl).setName("Synchronization").setHeading();
-    new import_obsidian.Setting(containerEl).setName("Drive folder path").setDesc("Google Drive folder where wiki is stored").addText(
-      (text) => text.setPlaceholder("/Vectrola/wiki").setValue(this.plugin.settings.driveFolderPath).onChange(async (value) => {
-        this.plugin.settings.driveFolderPath = value;
+    new import_obsidian.Setting(containerEl).setName("Vectrola User ID").setDesc("Your Vectrola username (from 'vectrola whoami')").addText(
+      (text) => text.setPlaceholder("e.g., arunes007").setValue(this.plugin.settings.userId).onChange(async (value) => {
+        this.plugin.settings.userId = value;
         await this.plugin.saveSettings();
       })
     );
+    if (this.plugin.settings.selectedFolderId) {
+      new import_obsidian.Setting(containerEl).setName("Selected folder").setDesc(`Syncing with: ${this.plugin.settings.selectedFolderName}`).addButton(
+        (btn) => btn.setButtonText("Change Folder").onClick(() => {
+          this.plugin.openFolderPicker();
+        })
+      );
+    } else if (this.plugin.isAuthenticated()) {
+      new import_obsidian.Setting(containerEl).setName("Select folder").setDesc("Choose the Google Drive folder to sync with").addButton(
+        (btn) => btn.setButtonText("Select Folder").setCta().onClick(() => {
+          this.plugin.openFolderPicker();
+        })
+      );
+    }
     new import_obsidian.Setting(containerEl).setName("Auto-sync on open").setDesc("Automatically pull from Drive when vault opens").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoSyncOnOpen).onChange(async (value) => {
         this.plugin.settings.autoSyncOnOpen = value;

@@ -49,7 +49,7 @@ No copy-paste required. No Client ID or Client Secret needed.
 |---------|-------------|---------|
 | Drive Folder Path | Where wiki is stored in Drive | `/Vectrola/wiki` |
 | Auto-sync on open | Pull from Drive when vault opens | On |
-| Sync interval | Auto-sync frequency in minutes | 5 |
+| Sync interval | Auto-sync frequency in minutes (0 to disable) | 1440 (daily) |
 
 ### 3. Sync Your Wiki
 
