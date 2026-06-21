@@ -60,7 +60,7 @@ interface TrackInfo {
 	duration?: string;
 	artwork_url?: string;
 	sources: {
-		local: Record<string, string>;  // hostname -> path
+		local: Record<string, { file_path: string; checksum: string }>;  // hostname -> {file_path, checksum}
 		cloud: Record<string, { file_id: string; path: string }>;
 	};
 	track_id?: string;
@@ -620,8 +620,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 			let audioLoaded = false;
 
 			// Priority 1: Local file on current device
-			if (sources.local?.[hostname]) {
-				const localPath = sources.local[hostname];
+			if (sources.local?.[hostname]?.file_path) {
+				const localPath = sources.local[hostname].file_path;
 				try {
 					const fs = require("fs");
 					if (fs.existsSync(localPath)) {
@@ -638,12 +638,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			// Priority 2: Local file on any device (might work if path is accessible)
 			if (!audioLoaded && sources.local) {
-				for (const [device, path] of Object.entries(sources.local)) {
+				for (const [device, deviceData] of Object.entries(sources.local)) {
 					if (device === hostname) continue; // Already tried
+					const path = (deviceData as any)?.file_path;
+					if (!path) continue;
 					try {
 						const fs = require("fs");
-						if (fs.existsSync(path as string)) {
-							const buffer = fs.readFileSync(path as string);
+						if (fs.existsSync(path)) {
+							const buffer = fs.readFileSync(path);
 							const blob = new Blob([buffer], { type: "audio/mpeg" });
 							player.audio.src = URL.createObjectURL(blob);
 							audioLoaded = true;

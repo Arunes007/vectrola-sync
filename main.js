@@ -488,7 +488,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   }
   async playTrack(index) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     const player = window.vectrolaPlayer;
     if (!player || index < 0 || index >= player.playlist.length)
       return;
@@ -501,8 +501,8 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       }
       const sources = track.sources || { local: {}, cloud: {} };
       let audioLoaded = false;
-      if ((_a = sources.local) == null ? void 0 : _a[hostname]) {
-        const localPath = sources.local[hostname];
+      if ((_b = (_a = sources.local) == null ? void 0 : _a[hostname]) == null ? void 0 : _b.file_path) {
+        const localPath = sources.local[hostname].file_path;
         try {
           const fs = require("fs");
           if (fs.existsSync(localPath)) {
@@ -517,8 +517,11 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         }
       }
       if (!audioLoaded && sources.local) {
-        for (const [device, path] of Object.entries(sources.local)) {
+        for (const [device, deviceData] of Object.entries(sources.local)) {
           if (device === hostname)
+            continue;
+          const path = deviceData == null ? void 0 : deviceData.file_path;
+          if (!path)
             continue;
           try {
             const fs = require("fs");
@@ -534,7 +537,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
           }
         }
       }
-      if (!audioLoaded && ((_c = (_b = sources.cloud) == null ? void 0 : _b.gdrive) == null ? void 0 : _c.file_id)) {
+      if (!audioLoaded && ((_d = (_c = sources.cloud) == null ? void 0 : _c.gdrive) == null ? void 0 : _d.file_id)) {
         const gdriveId = sources.cloud.gdrive.file_id;
         console.log("Trying GDrive playback:", gdriveId);
         try {
@@ -644,7 +647,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       if (player.overlayVisible) {
         this.updateOverlayContent();
       }
-      (_d = window.vectrolaHighlightUpdaters) == null ? void 0 : _d.forEach((fn) => fn());
+      (_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.forEach((fn) => fn());
       document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
         row.classList.add("audio-playing");
       });
