@@ -813,6 +813,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (player.isPlaying) {
 			player.audio.pause();
 			player.isPlaying = false;
+			// Save current position for resume after sleep
+			localStorage.setItem('vectrola-last-position', String(player.audio.currentTime));
 			if (ppBtn) setIconContent(ppBtn, 'play');
 			// Update Media Session playback state
 			if ('mediaSession' in navigator) {
@@ -826,7 +828,38 @@ export default class VectrolaSyncPlugin extends Plugin {
 				row.classList.remove("audio-playing");
 			});
 		} else {
-			player.audio.play().catch(e => console.error("Playback failed:", e));
+			// Check if blob URL might be expired (after sleep/suspend)
+			const currentSrc = player.audio.src;
+			const isBlobUrl = currentSrc && currentSrc.startsWith("blob:");
+
+			if (isBlobUrl && player.audio.readyState === 0) {
+				// Blob URL expired, re-load the track and restore position
+				if (player.currentIndex >= 0 && player.playlist.length > 0) {
+					const savedTime = parseFloat(localStorage.getItem('vectrola-last-position') || '0');
+					this.playTrack(player.currentIndex);
+					// Restore position after new blob loads
+					if (savedTime > 0) {
+						player.audio.addEventListener('canplay', () => {
+							player.audio.currentTime = savedTime;
+						}, { once: true });
+					}
+					return;
+				}
+			}
+
+			player.audio.play().catch(e => {
+				console.error("Playback failed:", e);
+				// If play fails, try re-loading the track
+				if (player.currentIndex >= 0 && player.playlist.length > 0) {
+					const savedTime = parseFloat(localStorage.getItem('vectrola-last-position') || '0');
+					this.playTrack(player.currentIndex);
+					if (savedTime > 0) {
+						player.audio.addEventListener('canplay', () => {
+							player.audio.currentTime = savedTime;
+						}, { once: true });
+					}
+				}
+			});
 			player.isPlaying = true;
 			if (ppBtn) setIconContent(ppBtn, 'pause');
 			// Update Media Session playback state

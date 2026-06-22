@@ -1136,6 +1136,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     if (player.isPlaying) {
       player.audio.pause();
       player.isPlaying = false;
+      localStorage.setItem("vectrola-last-position", String(player.audio.currentTime));
       if (ppBtn)
         setIconContent(ppBtn, "play");
       if ("mediaSession" in navigator) {
@@ -1147,7 +1148,32 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         row.classList.remove("audio-playing");
       });
     } else {
-      player.audio.play().catch((e) => console.error("Playback failed:", e));
+      const currentSrc = player.audio.src;
+      const isBlobUrl = currentSrc && currentSrc.startsWith("blob:");
+      if (isBlobUrl && player.audio.readyState === 0) {
+        if (player.currentIndex >= 0 && player.playlist.length > 0) {
+          const savedTime = parseFloat(localStorage.getItem("vectrola-last-position") || "0");
+          this.playTrack(player.currentIndex);
+          if (savedTime > 0) {
+            player.audio.addEventListener("canplay", () => {
+              player.audio.currentTime = savedTime;
+            }, { once: true });
+          }
+          return;
+        }
+      }
+      player.audio.play().catch((e) => {
+        console.error("Playback failed:", e);
+        if (player.currentIndex >= 0 && player.playlist.length > 0) {
+          const savedTime = parseFloat(localStorage.getItem("vectrola-last-position") || "0");
+          this.playTrack(player.currentIndex);
+          if (savedTime > 0) {
+            player.audio.addEventListener("canplay", () => {
+              player.audio.currentTime = savedTime;
+            }, { once: true });
+          }
+        }
+      });
       player.isPlaying = true;
       if (ppBtn)
         setIconContent(ppBtn, "pause");
