@@ -37,9 +37,9 @@ interface VectrolaSyncSettings {
 	lastSyncTime: number;
 	// Sync cache: maps relative path to md5 hash
 	syncCache: Record<string, string>;
-	// Google Picker selected folder
-	selectedFolderId: string;
-	selectedFolderName: string;
+	// Vectrola folder IDs (auto-discovered from CLI-created folders)
+	wikiFolderId: string;
+	audioFolderId: string;
 }
 
 interface DriveFile {
@@ -103,8 +103,8 @@ const DEFAULT_SETTINGS: VectrolaSyncSettings = {
 	syncIntervalMinutes: 1440,
 	lastSyncTime: 0,
 	syncCache: {},
-	selectedFolderId: "",
-	selectedFolderName: "",
+	wikiFolderId: "",
+	audioFolderId: "",
 };
 
 // =============================================================================
@@ -170,11 +170,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 		// Register OAuth callback handler for obsidian://vectrola-auth
 		this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
 			this.handleOAuthCallback(params);
-		});
-
-		// Register Picker callback handler for obsidian://vectrola-picker
-		this.registerObsidianProtocolHandler("vectrola-picker", (params) => {
-			this.handlePickerCallback(params);
 		});
 
 		// Register vectrola code block processor for audio player
@@ -267,12 +262,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 	}
 
 	isAuthenticated(): boolean {
-		return !!(this.settings.accessToken && this.settings.refreshToken && this.settings.selectedFolderId);
+		return !!(this.settings.accessToken && this.settings.refreshToken && this.settings.wikiFolderId);
 	}
 
-	// Has tokens but no folder selected (needs to complete picker)
+	// Has tokens but wiki folder not discovered yet
 	hasTokensOnly(): boolean {
-		return !!(this.settings.accessToken && this.settings.refreshToken) && !this.settings.selectedFolderId;
+		return !!(this.settings.accessToken && this.settings.refreshToken) && !this.settings.wikiFolderId;
 	}
 
 	// =========================================================================
@@ -1634,10 +1629,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return;
 		}
 
-		// Don't clear pendingAuthState yet - we'll use it for picker too
+		this.pendingAuthState = null;
 
 		if (error || !access_token) {
-			this.pendingAuthState = null;
 			new Notice(`❌ Authentication failed: ${error || "No token received"}`);
 			return;
 		}
@@ -1661,105 +1655,79 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		await this.saveSettings();
 
-		// If no folder selected yet, open picker
-		if (!this.settings.selectedFolderId) {
-			new Notice("🔐 Signed in! Now select your wiki folder...");
-			this.openFolderPicker();
-		} else {
-			// Already have folder, complete auth
-			this.pendingAuthState = null;
+		// Auto-discover Vectrola folders created by CLI
+		new Notice("🔍 Looking for Vectrola folders...");
+
+		try {
+			const wikiId = await this.resolveDrivePath("/Vectrola/wiki");
+			const audioId = await this.resolveDrivePath("/Vectrola/audio");
+
+			if (!wikiId) {
+				new Notice("❌ /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first to create it.", 8000);
+				return;
+			}
+
+			this.settings.wikiFolderId = wikiId;
+			this.settings.audioFolderId = audioId || "";
+			await this.saveSettings();
+
 			this.setupSyncInterval();
 			this.events.trigger("auth-state-changed");
-			new Notice("✅ Successfully connected to Google Drive!");
-		}
-	}
-
-	// Handle Picker callback from obsidian://vectrola-picker
-	private async handlePickerCallback(params: Record<string, string>) {
-		const { folder_id, folder_name, state, error } = params;
-
-		// Verify state
-		if (state && state !== this.pendingAuthState) {
-			console.error("Picker state mismatch:", { expected: this.pendingAuthState, received: state });
-			new Notice("❌ Folder selection failed: Invalid session. Please try again.");
-			return;
-		}
-
-		this.pendingAuthState = null;
-
-		if (error || !folder_id) {
-			new Notice(`❌ Folder selection failed: ${error || "No folder selected"}`);
-			return;
-		}
-
-		// Store selected folder
-		this.settings.selectedFolderId = folder_id;
-		this.settings.selectedFolderName = folder_name || "Selected Folder";
-		await this.saveSettings();
-
-		this.setupSyncInterval();
-		this.events.trigger("auth-state-changed");
-
-		new Notice(`✅ Connected to folder: ${this.settings.selectedFolderName}`);
-	}
-
-	// Get user's GDrive file IDs from Qdrant (for picker pre-selection)
-	async getGdriveFileIds(): Promise<string[]> {
-		if (!this.settings.userId) {
-			return [];
-		}
-		try {
-			const response = await requestUrl({
-				url: `${OAUTH_SERVER}/user-files?user_id=${encodeURIComponent(this.settings.userId)}`,
-				method: "GET",
-				headers: {
-					Authorization: `Bearer ${this.settings.accessToken}`,
-				},
-			});
-			return response.json.file_ids || [];
+			new Notice("✅ Connected to Vectrola folders!");
 		} catch (e) {
-			console.warn("Could not fetch GDrive file IDs:", e);
-			return [];
+			console.error("Failed to resolve Vectrola folders:", e);
+			new Notice("❌ Failed to find Vectrola folders. Run 'vectrola wiki --sync' first.");
 		}
 	}
 
-	// Open Google Picker to select folder
-	async openFolderPicker() {
-		// Generate a new state if not already pending (for standalone picker calls)
-		if (!this.pendingAuthState) {
-			this.pendingAuthState = generateRandomState();
+	// Resolve a Drive path to folder ID (e.g., "/Vectrola/wiki" -> "abc123")
+	async resolveDrivePath(path: string): Promise<string | null> {
+		if (path === "/" || path === "") return "root";
+
+		const parts = path.replace(/^\/+|\/+$/g, "").split("/");
+		let currentId = "root";
+
+		for (const part of parts) {
+			const query = `name='${part}' and '${currentId}' in parents and trashed=false`;
+			const response = await this.driveRequest(
+				`files?q=${encodeURIComponent(query)}&fields=files(id)`
+			);
+			const files = response?.files || [];
+			if (files.length === 0) return null;
+			currentId = files[0].id;
+		}
+		return currentId;
+	}
+
+	// Retry discovering Vectrola folders (called from settings tab)
+	async retryFolderDiscovery() {
+		if (!this.settings.accessToken) {
+			new Notice("Please sign in first.");
+			return;
 		}
 
-		// Get user's GDrive file IDs for pre-selection (grants access via drive.file scope)
-		let fileIds: string[] = [];
+		new Notice("🔍 Looking for Vectrola folders...");
+
 		try {
-			fileIds = await this.getGdriveFileIds();
-			if (fileIds.length > 0) {
-				console.log(`Fetched ${fileIds.length} GDrive file IDs for picker`);
+			const wikiId = await this.resolveDrivePath("/Vectrola/wiki");
+			const audioId = await this.resolveDrivePath("/Vectrola/audio");
+
+			if (!wikiId) {
+				new Notice("❌ /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first.", 8000);
+				return;
 			}
+
+			this.settings.wikiFolderId = wikiId;
+			this.settings.audioFolderId = audioId || "";
+			await this.saveSettings();
+
+			this.setupSyncInterval();
+			this.events.trigger("auth-state-changed");
+			new Notice("✅ Found Vectrola folders!");
 		} catch (e) {
-			console.warn("Could not fetch file IDs:", e);
+			console.error("Failed to resolve Vectrola folders:", e);
+			new Notice("❌ Failed to find Vectrola folders.");
 		}
-
-		let pickerUrl = `${OAUTH_SERVER}/picker?` +
-			`access_token=${encodeURIComponent(this.settings.accessToken)}` +
-			`&state=${encodeURIComponent(this.pendingAuthState)}`;
-
-		if (fileIds.length > 0) {
-			pickerUrl += `&file_ids=${encodeURIComponent(fileIds.join(','))}`;
-		}
-
-		// Open as popup window (fixes third-party cookie issues)
-		const width = 800;
-		const height = 600;
-		const left = Math.round((screen.width - width) / 2);
-		const top = Math.round((screen.height - height) / 2);
-
-		window.open(
-			pickerUrl,
-			'vectrola-picker',
-			`width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`
-		);
 	}
 
 	async getUserInfo(accessToken: string): Promise<{ email?: string }> {
@@ -1820,8 +1788,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 		this.settings.refreshToken = "";
 		this.settings.tokenExpiry = 0;
 		this.settings.userEmail = "";
-		this.settings.selectedFolderId = "";
-		this.settings.selectedFolderName = "";
+		this.settings.wikiFolderId = "";
+		this.settings.audioFolderId = "";
 		await this.saveSettings();
 
 		if (this.syncInterval) {
@@ -2076,10 +2044,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return;
 		}
 
-		// Check if folder is selected (required with drive.file scope)
-		if (!this.settings.selectedFolderId) {
-			new Notice("Please select a folder first.");
-			this.openFolderPicker();
+		// Check if wiki folder is discovered
+		if (!this.settings.wikiFolderId) {
+			new Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
 			return;
 		}
 
@@ -2100,8 +2067,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 		}
 
 		try {
-			// Use selected folder ID directly (from Google Picker)
-			const folderId = this.settings.selectedFolderId;
+			// Use wiki folder ID (auto-discovered from /Vectrola/wiki)
+			const folderId = this.settings.wikiFolderId;
 
 			if (this.syncCancelled) { this.isSyncing = false; return; }
 
@@ -2235,18 +2202,17 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return;
 		}
 
-		// Check if folder is selected (required with drive.file scope)
-		if (!this.settings.selectedFolderId) {
-			new Notice("Please select a folder first.");
-			this.openFolderPicker();
+		// Check if wiki folder is discovered
+		if (!this.settings.wikiFolderId) {
+			new Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
 			return;
 		}
 
 		new Notice("Pushing to Google Drive...");
 
 		try {
-			// Use selected folder ID directly
-			const folderId = this.settings.selectedFolderId;
+			// Use wiki folder ID (auto-discovered from /Vectrola/wiki)
+			const folderId = this.settings.wikiFolderId;
 
 			// Get all markdown files in vault
 			const files = this.app.vault.getMarkdownFiles();
@@ -2373,23 +2339,24 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 						})
 				);
 		} else if (this.plugin.hasTokensOnly()) {
-			// Partially authenticated - has tokens but no folder selected
+			// Partially authenticated - has tokens but wiki folder not found
 			const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
 			const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
 			statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "⚠️" });
 			const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
-			statusText.createEl("div", { cls: "vectrola-status-title", text: "Setup incomplete" });
-			statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Please select a folder to complete setup" });
+			statusText.createEl("div", { cls: "vectrola-status-title", text: "Wiki folder not found" });
+			statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Run 'vectrola wiki --sync' in terminal first" });
 
 			new Setting(containerEl)
-				.setName("Select folder")
-				.setDesc("Choose the Google Drive folder to sync with")
+				.setName("Retry")
+				.setDesc("Try to find Vectrola folders again")
 				.addButton((btn) =>
 					btn
-						.setButtonText("Select Folder")
+						.setButtonText("Retry")
 						.setCta()
-						.onClick(() => {
-							this.plugin.openFolderPicker();
+						.onClick(async () => {
+							await this.plugin.retryFolderDiscovery();
+							this.display();
 						})
 				);
 
@@ -2443,28 +2410,17 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 					})
 			);
 
-		// Show selected folder (from Picker)
-		if (this.plugin.settings.selectedFolderId) {
+		// Show wiki folder status
+		if (this.plugin.settings.wikiFolderId) {
 			new Setting(containerEl)
-				.setName("Selected folder")
-				.setDesc(`Syncing with: ${this.plugin.settings.selectedFolderName}`)
+				.setName("Wiki folder")
+				.setDesc("✓ Connected to /Vectrola/wiki")
 				.addButton((btn) =>
 					btn
-						.setButtonText("Change Folder")
-						.onClick(() => {
-							this.plugin.openFolderPicker();
-						})
-				);
-		} else if (this.plugin.isAuthenticated()) {
-			new Setting(containerEl)
-				.setName("Select folder")
-				.setDesc("Choose the Google Drive folder to sync with")
-				.addButton((btn) =>
-					btn
-						.setButtonText("Select Folder")
-						.setCta()
-						.onClick(() => {
-							this.plugin.openFolderPicker();
+						.setButtonText("Refresh")
+						.onClick(async () => {
+							await this.plugin.retryFolderDiscovery();
+							this.display();
 						})
 				);
 		}

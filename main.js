@@ -111,8 +111,8 @@ var DEFAULT_SETTINGS = {
   syncIntervalMinutes: 1440,
   lastSyncTime: 0,
   syncCache: {},
-  selectedFolderId: "",
-  selectedFolderName: ""
+  wikiFolderId: "",
+  audioFolderId: ""
 };
 function generateCodeVerifier() {
   const array = new Uint8Array(32);
@@ -158,9 +158,6 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     await this.loadSettings();
     this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
       this.handleOAuthCallback(params);
-    });
-    this.registerObsidianProtocolHandler("vectrola-picker", (params) => {
-      this.handlePickerCallback(params);
     });
     this.registerMarkdownCodeBlockProcessor("vectrola", (source, el, ctx) => {
       this.renderVectrolaPlayer(source, el);
@@ -229,11 +226,11 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     }
   }
   isAuthenticated() {
-    return !!(this.settings.accessToken && this.settings.refreshToken && this.settings.selectedFolderId);
+    return !!(this.settings.accessToken && this.settings.refreshToken && this.settings.wikiFolderId);
   }
-  // Has tokens but no folder selected (needs to complete picker)
+  // Has tokens but wiki folder not discovered yet
   hasTokensOnly() {
-    return !!(this.settings.accessToken && this.settings.refreshToken) && !this.settings.selectedFolderId;
+    return !!(this.settings.accessToken && this.settings.refreshToken) && !this.settings.wikiFolderId;
   }
   // =========================================================================
   // Vectrola Audio Player Renderer
@@ -1314,8 +1311,8 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       new import_obsidian.Notice("\u274C Authentication failed: Invalid session. Please try again.");
       return;
     }
+    this.pendingAuthState = null;
     if (error || !access_token) {
-      this.pendingAuthState = null;
       new import_obsidian.Notice(`\u274C Authentication failed: ${error || "No token received"}`);
       return;
     }
@@ -1332,82 +1329,67 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     } catch (e) {
     }
     await this.saveSettings();
-    if (!this.settings.selectedFolderId) {
-      new import_obsidian.Notice("\u{1F510} Signed in! Now select your wiki folder...");
-      this.openFolderPicker();
-    } else {
-      this.pendingAuthState = null;
+    new import_obsidian.Notice("\u{1F50D} Looking for Vectrola folders...");
+    try {
+      const wikiId = await this.resolveDrivePath("/Vectrola/wiki");
+      const audioId = await this.resolveDrivePath("/Vectrola/audio");
+      if (!wikiId) {
+        new import_obsidian.Notice("\u274C /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first to create it.", 8e3);
+        return;
+      }
+      this.settings.wikiFolderId = wikiId;
+      this.settings.audioFolderId = audioId || "";
+      await this.saveSettings();
       this.setupSyncInterval();
       this.events.trigger("auth-state-changed");
-      new import_obsidian.Notice("\u2705 Successfully connected to Google Drive!");
-    }
-  }
-  // Handle Picker callback from obsidian://vectrola-picker
-  async handlePickerCallback(params) {
-    const { folder_id, folder_name, state, error } = params;
-    if (state && state !== this.pendingAuthState) {
-      console.error("Picker state mismatch:", { expected: this.pendingAuthState, received: state });
-      new import_obsidian.Notice("\u274C Folder selection failed: Invalid session. Please try again.");
-      return;
-    }
-    this.pendingAuthState = null;
-    if (error || !folder_id) {
-      new import_obsidian.Notice(`\u274C Folder selection failed: ${error || "No folder selected"}`);
-      return;
-    }
-    this.settings.selectedFolderId = folder_id;
-    this.settings.selectedFolderName = folder_name || "Selected Folder";
-    await this.saveSettings();
-    this.setupSyncInterval();
-    this.events.trigger("auth-state-changed");
-    new import_obsidian.Notice(`\u2705 Connected to folder: ${this.settings.selectedFolderName}`);
-  }
-  // Get user's GDrive file IDs from Qdrant (for picker pre-selection)
-  async getGdriveFileIds() {
-    if (!this.settings.userId) {
-      return [];
-    }
-    try {
-      const response = await (0, import_obsidian.requestUrl)({
-        url: `${OAUTH_SERVER}/user-files?user_id=${encodeURIComponent(this.settings.userId)}`,
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.settings.accessToken}`
-        }
-      });
-      return response.json.file_ids || [];
+      new import_obsidian.Notice("\u2705 Connected to Vectrola folders!");
     } catch (e) {
-      console.warn("Could not fetch GDrive file IDs:", e);
-      return [];
+      console.error("Failed to resolve Vectrola folders:", e);
+      new import_obsidian.Notice("\u274C Failed to find Vectrola folders. Run 'vectrola wiki --sync' first.");
     }
   }
-  // Open Google Picker to select folder
-  async openFolderPicker() {
-    if (!this.pendingAuthState) {
-      this.pendingAuthState = generateRandomState();
+  // Resolve a Drive path to folder ID (e.g., "/Vectrola/wiki" -> "abc123")
+  async resolveDrivePath(path) {
+    if (path === "/" || path === "")
+      return "root";
+    const parts = path.replace(/^\/+|\/+$/g, "").split("/");
+    let currentId = "root";
+    for (const part of parts) {
+      const query = `name='${part}' and '${currentId}' in parents and trashed=false`;
+      const response = await this.driveRequest(
+        `files?q=${encodeURIComponent(query)}&fields=files(id)`
+      );
+      const files = (response == null ? void 0 : response.files) || [];
+      if (files.length === 0)
+        return null;
+      currentId = files[0].id;
     }
-    let fileIds = [];
+    return currentId;
+  }
+  // Retry discovering Vectrola folders (called from settings tab)
+  async retryFolderDiscovery() {
+    if (!this.settings.accessToken) {
+      new import_obsidian.Notice("Please sign in first.");
+      return;
+    }
+    new import_obsidian.Notice("\u{1F50D} Looking for Vectrola folders...");
     try {
-      fileIds = await this.getGdriveFileIds();
-      if (fileIds.length > 0) {
-        console.log(`Fetched ${fileIds.length} GDrive file IDs for picker`);
+      const wikiId = await this.resolveDrivePath("/Vectrola/wiki");
+      const audioId = await this.resolveDrivePath("/Vectrola/audio");
+      if (!wikiId) {
+        new import_obsidian.Notice("\u274C /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first.", 8e3);
+        return;
       }
+      this.settings.wikiFolderId = wikiId;
+      this.settings.audioFolderId = audioId || "";
+      await this.saveSettings();
+      this.setupSyncInterval();
+      this.events.trigger("auth-state-changed");
+      new import_obsidian.Notice("\u2705 Found Vectrola folders!");
     } catch (e) {
-      console.warn("Could not fetch file IDs:", e);
+      console.error("Failed to resolve Vectrola folders:", e);
+      new import_obsidian.Notice("\u274C Failed to find Vectrola folders.");
     }
-    let pickerUrl = `${OAUTH_SERVER}/picker?access_token=${encodeURIComponent(this.settings.accessToken)}&state=${encodeURIComponent(this.pendingAuthState)}`;
-    if (fileIds.length > 0) {
-      pickerUrl += `&file_ids=${encodeURIComponent(fileIds.join(","))}`;
-    }
-    const width = 800;
-    const height = 600;
-    const left = Math.round((screen.width - width) / 2);
-    const top = Math.round((screen.height - height) / 2);
-    window.open(
-      pickerUrl,
-      "vectrola-picker",
-      `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`
-    );
   }
   async getUserInfo(accessToken) {
     const response = await (0, import_obsidian.requestUrl)({
@@ -1458,8 +1440,8 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     this.settings.refreshToken = "";
     this.settings.tokenExpiry = 0;
     this.settings.userEmail = "";
-    this.settings.selectedFolderId = "";
-    this.settings.selectedFolderName = "";
+    this.settings.wikiFolderId = "";
+    this.settings.audioFolderId = "";
     await this.saveSettings();
     if (this.syncInterval) {
       window.clearInterval(this.syncInterval);
@@ -1636,9 +1618,8 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       new import_obsidian.Notice("Please sign in with Google Drive first.");
       return;
     }
-    if (!this.settings.selectedFolderId) {
-      new import_obsidian.Notice("Please select a folder first.");
-      this.openFolderPicker();
+    if (!this.settings.wikiFolderId) {
+      new import_obsidian.Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
       return;
     }
     if (this.isSyncing) {
@@ -1653,7 +1634,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       this.noticeContent.label.textContent = "\u{1F504} Connecting...";
     }
     try {
-      const folderId = this.settings.selectedFolderId;
+      const folderId = this.settings.wikiFolderId;
       if (this.syncCancelled) {
         this.isSyncing = false;
         return;
@@ -1768,14 +1749,13 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       new import_obsidian.Notice("Please sign in with Google Drive first.");
       return;
     }
-    if (!this.settings.selectedFolderId) {
-      new import_obsidian.Notice("Please select a folder first.");
-      this.openFolderPicker();
+    if (!this.settings.wikiFolderId) {
+      new import_obsidian.Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
       return;
     }
     new import_obsidian.Notice("Pushing to Google Drive...");
     try {
-      const folderId = this.settings.selectedFolderId;
+      const folderId = this.settings.wikiFolderId;
       const files = this.app.vault.getMarkdownFiles();
       let uploaded = 0;
       for (const file of files) {
@@ -1864,11 +1844,12 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
       const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
       statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "\u26A0\uFE0F" });
       const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
-      statusText.createEl("div", { cls: "vectrola-status-title", text: "Setup incomplete" });
-      statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Please select a folder to complete setup" });
-      new import_obsidian.Setting(containerEl).setName("Select folder").setDesc("Choose the Google Drive folder to sync with").addButton(
-        (btn) => btn.setButtonText("Select Folder").setCta().onClick(() => {
-          this.plugin.openFolderPicker();
+      statusText.createEl("div", { cls: "vectrola-status-title", text: "Wiki folder not found" });
+      statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Run 'vectrola wiki --sync' in terminal first" });
+      new import_obsidian.Setting(containerEl).setName("Retry").setDesc("Try to find Vectrola folders again").addButton(
+        (btn) => btn.setButtonText("Retry").setCta().onClick(async () => {
+          await this.plugin.retryFolderDiscovery();
+          this.display();
         })
       );
       new import_obsidian.Setting(containerEl).setName("Sign out").setDesc("Start over with a different account").addButton(
@@ -1898,16 +1879,11 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    if (this.plugin.settings.selectedFolderId) {
-      new import_obsidian.Setting(containerEl).setName("Selected folder").setDesc(`Syncing with: ${this.plugin.settings.selectedFolderName}`).addButton(
-        (btn) => btn.setButtonText("Change Folder").onClick(() => {
-          this.plugin.openFolderPicker();
-        })
-      );
-    } else if (this.plugin.isAuthenticated()) {
-      new import_obsidian.Setting(containerEl).setName("Select folder").setDesc("Choose the Google Drive folder to sync with").addButton(
-        (btn) => btn.setButtonText("Select Folder").setCta().onClick(() => {
-          this.plugin.openFolderPicker();
+    if (this.plugin.settings.wikiFolderId) {
+      new import_obsidian.Setting(containerEl).setName("Wiki folder").setDesc("\u2713 Connected to /Vectrola/wiki").addButton(
+        (btn) => btn.setButtonText("Refresh").onClick(async () => {
+          await this.plugin.retryFolderDiscovery();
+          this.display();
         })
       );
     }
