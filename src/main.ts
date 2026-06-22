@@ -10,6 +10,7 @@ import {
 	Platform,
 } from "obsidian";
 
+import * as SparkMD5 from "spark-md5";
 import { ICONS, createIcon, setIconContent } from "./icons";
 
 // =============================================================================
@@ -2154,24 +2155,39 @@ export default class VectrolaSyncPlugin extends Plugin {
 				}
 				await this.syncFolderFromDrive(file.id, filePath, onProgress);
 			} else if (file.name.endsWith(".md")) {
-				// Check if file is unchanged (compare md5 hash from cache) BEFORE incrementing
+				// First check cache (fast path)
 				const cachedHash = this.settings.syncCache[filePath];
 				if (cachedHash && file.md5Checksum && cachedHash === file.md5Checksum) {
-					// File unchanged, skip download
+					// File unchanged per cache, skip download
 					this.syncStats.processed++;
 					this.syncStats.skipped++;
 					if (onProgress) onProgress(this.syncStats.processed);
 					continue;
 				}
 
-				// Track as downloaded (not skipped)
+				// Cache miss - check if local file exists and compare MD5 directly
+				const existingFile = this.app.vault.getAbstractFileByPath(filePath);
+				if (existingFile instanceof TFile && file.md5Checksum) {
+					const localContent = await this.app.vault.read(existingFile);
+					const localHash = SparkMD5.hash(localContent);
+
+					if (localHash === file.md5Checksum) {
+						// Local file matches Drive, skip download and update cache
+						this.syncStats.processed++;
+						this.syncStats.skipped++;
+						this.settings.syncCache[filePath] = file.md5Checksum;
+						if (onProgress) onProgress(this.syncStats.processed);
+						continue;
+					}
+				}
+
+				// File missing or different - download it
 				this.syncStats.processed++;
 				this.syncStats.downloaded++;
 				if (onProgress) onProgress(this.syncStats.processed);
 
 				// Download and save markdown file
 				const content = await this.downloadFile(file.id);
-				const existingFile = this.app.vault.getAbstractFileByPath(filePath);
 
 				if (existingFile instanceof TFile) {
 					await this.app.vault.modify(existingFile, content);
