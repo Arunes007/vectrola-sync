@@ -1,65 +1,25 @@
 import {
 	App,
 	Plugin,
-	PluginSettingTab,
-	Setting,
 	Notice,
-	requestUrl,
 	TFile,
 	Events,
 	Platform,
 } from "obsidian";
 
-import * as SparkMD5 from "spark-md5";
-import { ICONS, createIcon, setIconContent } from "./icons";
+import { ICONS, setIconContent } from "./icons";
 
 // Import from extracted modules
 import {
 	VectrolaSyncSettings,
 	VectrolaSyncAPI,
-	DriveFile,
 	TrackInfo,
-	VectrolaPlayerState,
 	DEFAULT_SETTINGS,
-	GOOGLE_CLIENT_ID,
-	OAUTH_SERVER,
-	REDIRECT_URI,
-	SCOPES,
 } from "./types";
-
-// =============================================================================
-// PKCE Helpers
-// =============================================================================
-
-function generateCodeVerifier(): string {
-	const array = new Uint8Array(32);
-	crypto.getRandomValues(array);
-	return base64UrlEncode(array);
-}
-
-async function generateCodeChallenge(verifier: string): Promise<string> {
-	const encoder = new TextEncoder();
-	const data = encoder.encode(verifier);
-	const digest = await crypto.subtle.digest("SHA-256", data);
-	return base64UrlEncode(new Uint8Array(digest));
-}
-
-function generateRandomState(): string {
-	const array = new Uint8Array(16);
-	crypto.getRandomValues(array);
-	return base64UrlEncode(array);
-}
-
-function base64UrlEncode(buffer: Uint8Array): string {
-	let binary = "";
-	for (let i = 0; i < buffer.length; i++) {
-		binary += String.fromCharCode(buffer[i]);
-	}
-	return btoa(binary)
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
-}
+import { createAuthManager, AuthManager } from "./auth";
+import { createDriveClient, DriveClient } from "./drive-api";
+import { createSyncEngine, SyncEngine } from "./sync";
+import { VectrolaSyncSettingTab } from "./settings-tab";
 
 // =============================================================================
 // Main Plugin
@@ -72,18 +32,49 @@ export default class VectrolaSyncPlugin extends Plugin {
 	// Public API for DataviewJS access
 	public api: VectrolaSyncAPI;
 
-	// Pending auth state for CSRF protection
-	private pendingAuthState: string | null = null;
-
 	// Event emitter for auth state changes
 	public events: Events = new Events();
+
+	// Module instances
+	private auth!: AuthManager;
+	private drive!: DriveClient;
+	private sync!: SyncEngine;
 
 	async onload() {
 		await this.loadSettings();
 
+		// Initialize modules
+		// Drive client needs a token getter - we'll set it up after auth
+		this.drive = createDriveClient(() => this.auth.getValidAccessToken());
+
+		// Auth manager
+		this.auth = createAuthManager({
+			settings: this.settings,
+			saveSettings: () => this.saveSettings(),
+			events: this.events,
+			driveRequest: (endpoint, method, body, contentType) =>
+				this.drive.driveRequest(endpoint, method, body, contentType),
+			setupSyncInterval: () => this.setupSyncInterval(),
+			clearSyncInterval: () => {
+				if (this.syncInterval) {
+					window.clearInterval(this.syncInterval);
+					this.syncInterval = null;
+				}
+			},
+		});
+
+		// Sync engine
+		this.sync = createSyncEngine({
+			app: this.app,
+			driveClient: this.drive,
+			settings: this.settings,
+			saveSettings: () => this.saveSettings(),
+			isAuthenticated: () => this.auth.isAuthenticated(),
+		});
+
 		// Register OAuth callback handler for obsidian://vectrola-auth
 		this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
-			this.handleOAuthCallback(params);
+			this.auth.handleOAuthCallback(params);
 		});
 
 		// Register vectrola code block processor for audio player
@@ -93,13 +84,13 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Expose API for audio player
 		this.api = {
-			fetchDriveFile: this.fetchDriveFile.bind(this),
-			isAuthenticated: this.isAuthenticated.bind(this),
+			fetchDriveFile: (id: string) => this.drive.downloadFileBuffer(id),
+			isAuthenticated: () => this.auth.isAuthenticated(),
 		};
 
 		// Add ribbon icon
 		this.addRibbonIcon("refresh-cw", "Sync with Vectrola", async () => {
-			await this.syncFromDrive();
+			await this.sync.syncFromDrive();
 		});
 
 		// Add commands
@@ -107,7 +98,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			id: "vectrola-sync-pull",
 			name: "Pull wiki from Google Drive",
 			callback: async () => {
-				await this.syncFromDrive();
+				await this.sync.syncFromDrive();
 			},
 		});
 
@@ -115,7 +106,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			id: "vectrola-sync-push",
 			name: "Push wiki to Google Drive",
 			callback: async () => {
-				await this.syncToDrive();
+				await this.sync.syncToDrive();
 			},
 		});
 
@@ -123,7 +114,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			id: "vectrola-auth",
 			name: "Sign in with Google Drive",
 			callback: async () => {
-				await this.authenticate();
+				await this.auth.authenticate();
 			},
 		});
 
@@ -131,17 +122,29 @@ export default class VectrolaSyncPlugin extends Plugin {
 			id: "vectrola-signout",
 			name: "Sign out from Google Drive",
 			callback: async () => {
-				await this.signOut();
+				await this.auth.signOut();
 			},
 		});
 
 		// Add settings tab
-		this.addSettingTab(new VectrolaSyncSettingTab(this.app, this));
+		this.addSettingTab(new VectrolaSyncSettingTab(this.app, this, {
+			settings: this.settings,
+			saveSettings: () => this.saveSettings(),
+			events: this.events,
+			isAuthenticated: () => this.auth.isAuthenticated(),
+			hasTokensOnly: () => this.auth.hasTokensOnly(),
+			authenticate: () => this.auth.authenticate(),
+			signOut: () => this.auth.signOut(),
+			retryFolderDiscovery: () => this.auth.retryFolderDiscovery(),
+			syncFromDrive: () => this.sync.syncFromDrive(),
+			syncToDrive: () => this.sync.syncToDrive(),
+			setupSyncInterval: () => this.setupSyncInterval(),
+		}));
 
 		// Auto-sync on vault open
-		if (this.settings.autoSyncOnOpen && this.isAuthenticated()) {
+		if (this.settings.autoSyncOnOpen && this.auth.isAuthenticated()) {
 			// Delay to let Obsidian fully load
-			setTimeout(() => this.syncFromDrive(), 3000);
+			setTimeout(() => this.sync.syncFromDrive(), 3000);
 		}
 
 		// Set up periodic sync
@@ -167,21 +170,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 			window.clearInterval(this.syncInterval);
 		}
 
-		if (this.settings.syncIntervalMinutes > 0 && this.isAuthenticated()) {
+		if (this.settings.syncIntervalMinutes > 0 && this.auth.isAuthenticated()) {
 			this.syncInterval = window.setInterval(
-				() => this.syncFromDrive(),
+				() => this.sync.syncFromDrive(),
 				this.settings.syncIntervalMinutes * 60 * 1000
 			);
 		}
-	}
-
-	isAuthenticated(): boolean {
-		return !!(this.settings.accessToken && this.settings.refreshToken && this.settings.wikiFolderId);
-	}
-
-	// Has tokens but wiki folder not discovered yet
-	hasTokensOnly(): boolean {
-		return !!(this.settings.accessToken && this.settings.refreshToken) && !this.settings.wikiFolderId;
 	}
 
 	// =========================================================================
@@ -581,10 +575,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 		}
 
 		// === CLOUD: Google Drive (both platforms) ===
-		if (!audioLoaded && sources.cloud?.gdrive?.file_id && this.isAuthenticated()) {
+		if (!audioLoaded && sources.cloud?.gdrive?.file_id && this.auth.isAuthenticated()) {
 			const gdriveId = sources.cloud.gdrive.file_id;
 			try {
-				const arrayBuffer = await this.fetchDriveFile(gdriveId);
+				const arrayBuffer = await this.drive.downloadFileBuffer(gdriveId);
 				const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
 				player.audio.src = URL.createObjectURL(blob);
 				audioLoaded = true;
@@ -606,7 +600,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				const devices = Object.keys(sources.local).join(", ");
 				message += `File exists on: ${devices}\n`;
 				message += `Re-ingest on this device: vectrola ingest <path>`;
-			} else if (hasCloudSources && !this.isAuthenticated()) {
+			} else if (hasCloudSources && !this.auth.isAuthenticated()) {
 				// Has cloud sources but not authenticated
 				message += `Available on Google Drive.\n`;
 				message += `Sign in to Vectrola Sync to play.`;
@@ -2308,947 +2302,5 @@ export default class VectrolaSyncPlugin extends Plugin {
 			}
 		};
 		requestAnimationFrame(updateFn);
-	}
-
-	// =========================================================================
-	// OAuth Authentication (Server-side token exchange)
-	// =========================================================================
-
-	async authenticate() {
-		// Generate PKCE verifier and challenge
-		const codeVerifier = generateCodeVerifier();
-		const codeChallenge = await generateCodeChallenge(codeVerifier);
-
-		// Generate random state for CSRF protection
-		const state = generateRandomState();
-		this.pendingAuthState = state;
-
-		// Step 1: Register auth session with server (stores verifier)
-		try {
-			await requestUrl({
-				url: `${OAUTH_SERVER}/auth/start`,
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ state, code_verifier: codeVerifier }),
-			});
-		} catch (error) {
-			console.error("Failed to start auth session:", error);
-			new Notice("Failed to connect to auth server. Please try again.");
-			this.pendingAuthState = null;
-			return;
-		}
-
-		// Step 2: Build OAuth URL
-		let authUrl =
-			`https://accounts.google.com/o/oauth2/v2/auth?` +
-			`client_id=${encodeURIComponent(GOOGLE_CLIENT_ID)}` +
-			`&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-			`&response_type=code` +
-			`&scope=${encodeURIComponent(SCOPES)}` +
-			`&access_type=offline` +
-			`&prompt=consent` +
-			`&code_challenge=${codeChallenge}` +
-			`&code_challenge_method=S256` +
-			`&state=${state}`;
-
-		// Add login hint if we have previous email
-		if (this.settings.userEmail) {
-			authUrl += `&login_hint=${encodeURIComponent(this.settings.userEmail)}`;
-		}
-
-		// Step 3: Open in system browser
-		try {
-			const { shell } = require("electron");
-			shell.openExternal(authUrl);
-		} catch {
-			window.open(authUrl);
-		}
-
-		new Notice("🔐 Complete sign-in in your browser...");
-		// Tokens will be received via obsidian://vectrola-auth protocol handler
-	}
-
-	// Handle OAuth callback from obsidian://vectrola-auth
-	private async handleOAuthCallback(params: Record<string, string>) {
-		const { access_token, refresh_token, expires_in, state, error } = params;
-
-		// Verify state to prevent CSRF
-		if (state !== this.pendingAuthState) {
-			console.error("OAuth state mismatch:", { expected: this.pendingAuthState, received: state });
-			new Notice("❌ Authentication failed: Invalid session. Please try again.");
-			return;
-		}
-
-		this.pendingAuthState = null;
-
-		if (error || !access_token) {
-			new Notice(`❌ Authentication failed: ${error || "No token received"}`);
-			return;
-		}
-
-		// Store tokens
-		this.settings.accessToken = access_token;
-		if (refresh_token) {
-			this.settings.refreshToken = refresh_token;
-		}
-		this.settings.tokenExpiry = Date.now() + (parseInt(expires_in) * 1000);
-
-		// Try to get user email for login_hint
-		try {
-			const userInfo = await this.getUserInfo(access_token);
-			if (userInfo.email) {
-				this.settings.userEmail = userInfo.email;
-			}
-		} catch {
-			// Not critical, ignore
-		}
-
-		await this.saveSettings();
-
-		// Auto-discover Vectrola folders created by CLI
-		new Notice("🔍 Looking for Vectrola folders...");
-
-		try {
-			const wikiId = await this.resolveDrivePath("/Vectrola/wiki");
-			const audioId = await this.resolveDrivePath("/Vectrola/audio");
-
-			if (!wikiId) {
-				new Notice("❌ /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first to create it.", 8000);
-				return;
-			}
-
-			this.settings.wikiFolderId = wikiId;
-			this.settings.audioFolderId = audioId || "";
-			await this.saveSettings();
-
-			this.setupSyncInterval();
-			this.events.trigger("auth-state-changed");
-			new Notice("✅ Connected to Vectrola folders!");
-		} catch (e) {
-			console.error("Failed to resolve Vectrola folders:", e);
-			new Notice("❌ Failed to find Vectrola folders. Run 'vectrola wiki --sync' first.");
-		}
-	}
-
-	// Resolve a Drive path to folder ID (e.g., "/Vectrola/wiki" -> "abc123")
-	async resolveDrivePath(path: string): Promise<string | null> {
-		if (path === "/" || path === "") return "root";
-
-		const parts = path.replace(/^\/+|\/+$/g, "").split("/");
-		let currentId = "root";
-
-		for (const part of parts) {
-			const query = `name='${part}' and '${currentId}' in parents and trashed=false`;
-			const response = await this.driveRequest(
-				`files?q=${encodeURIComponent(query)}&fields=files(id)`
-			);
-			const files = response?.files || [];
-			if (files.length === 0) return null;
-			currentId = files[0].id;
-		}
-		return currentId;
-	}
-
-	// Retry discovering Vectrola folders (called from settings tab)
-	async retryFolderDiscovery() {
-		if (!this.settings.accessToken) {
-			new Notice("Please sign in first.");
-			return;
-		}
-
-		new Notice("🔍 Looking for Vectrola folders...");
-
-		try {
-			const wikiId = await this.resolveDrivePath("/Vectrola/wiki");
-			const audioId = await this.resolveDrivePath("/Vectrola/audio");
-
-			if (!wikiId) {
-				new Notice("❌ /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first.", 8000);
-				return;
-			}
-
-			this.settings.wikiFolderId = wikiId;
-			this.settings.audioFolderId = audioId || "";
-			await this.saveSettings();
-
-			this.setupSyncInterval();
-			this.events.trigger("auth-state-changed");
-			new Notice("✅ Found Vectrola folders!");
-		} catch (e) {
-			console.error("Failed to resolve Vectrola folders:", e);
-			new Notice("❌ Failed to find Vectrola folders.");
-		}
-	}
-
-	async getUserInfo(accessToken: string): Promise<{ email?: string }> {
-		const response = await requestUrl({
-			url: "https://www.googleapis.com/oauth2/v2/userinfo",
-			method: "GET",
-			headers: {
-				Authorization: `Bearer ${accessToken}`,
-			},
-		});
-		return response.json;
-	}
-
-	async refreshAccessToken(): Promise<boolean> {
-		if (!this.settings.refreshToken) {
-			return false;
-		}
-
-		try {
-			// Use server for refresh (has client_secret)
-			const response = await requestUrl({
-				url: `${OAUTH_SERVER}/auth/refresh`,
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ refresh_token: this.settings.refreshToken }),
-			});
-
-			const tokens = response.json;
-
-			if (tokens.error) {
-				throw new Error(tokens.error);
-			}
-
-			this.settings.accessToken = tokens.access_token;
-			this.settings.tokenExpiry = Date.now() + tokens.expires_in * 1000;
-			await this.saveSettings();
-			return true;
-		} catch (error) {
-			console.error("Token refresh failed:", error);
-			return false;
-		}
-	}
-
-	async getValidAccessToken(): Promise<string | null> {
-		// Refresh 1 minute before expiry
-		if (Date.now() > this.settings.tokenExpiry - 60000) {
-			const refreshed = await this.refreshAccessToken();
-			if (!refreshed) {
-				new Notice("Session expired. Please sign in again.");
-				return null;
-			}
-		}
-		return this.settings.accessToken;
-	}
-
-	async signOut() {
-		this.settings.accessToken = "";
-		this.settings.refreshToken = "";
-		this.settings.tokenExpiry = 0;
-		this.settings.userEmail = "";
-		this.settings.wikiFolderId = "";
-		this.settings.audioFolderId = "";
-		await this.saveSettings();
-
-		if (this.syncInterval) {
-			window.clearInterval(this.syncInterval);
-			this.syncInterval = null;
-		}
-
-		new Notice("Signed out from Google Drive.");
-	}
-
-	// =========================================================================
-	// Public API for DataviewJS (audio player)
-	// =========================================================================
-
-	/**
-	 * Fetch a file from Google Drive by ID.
-	 * Used by DataviewJS audio player to stream music files.
-	 * Token is handled internally - never exposed to caller.
-	 */
-	async fetchDriveFile(fileId: string): Promise<ArrayBuffer> {
-		const token = await this.getValidAccessToken();
-		if (!token) {
-			throw new Error("Not authenticated with Google Drive");
-		}
-
-		const response = await requestUrl({
-			url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-			method: "GET",
-			headers: {
-				Authorization: `Bearer ${token}`,
-			},
-		});
-
-		return response.arrayBuffer;
-	}
-
-	// =========================================================================
-	// Google Drive API
-	// =========================================================================
-
-	async driveRequest(
-		endpoint: string,
-		method: string = "GET",
-		body?: string | ArrayBuffer,
-		contentType?: string
-	): Promise<any> {
-		const token = await this.getValidAccessToken();
-		if (!token) {
-			throw new Error("Not authenticated");
-		}
-
-		const headers: Record<string, string> = {
-			Authorization: `Bearer ${token}`,
-		};
-		if (contentType) {
-			headers["Content-Type"] = contentType;
-		}
-
-		const response = await requestUrl({
-			url: `https://www.googleapis.com/drive/v3/${endpoint}`,
-			method,
-			headers,
-			body: body as string,
-		});
-
-		return response.json;
-	}
-
-	async findOrCreateFolder(path: string): Promise<string> {
-		const parts = path.split("/").filter((p) => p);
-		let parentId = "root";
-
-		for (const part of parts) {
-			// Search for existing folder
-			const query = `name='${part}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-			const searchResult = await this.driveRequest(
-				`files?q=${encodeURIComponent(query)}&fields=files(id,name)`
-			);
-
-			if (searchResult.files && searchResult.files.length > 0) {
-				parentId = searchResult.files[0].id;
-			} else {
-				// Create folder
-				const metadata = {
-					name: part,
-					mimeType: "application/vnd.google-apps.folder",
-					parents: [parentId],
-				};
-
-				const created = await this.driveRequest(
-					"files?fields=id",
-					"POST",
-					JSON.stringify(metadata),
-					"application/json"
-				);
-				parentId = created.id;
-			}
-		}
-
-		return parentId;
-	}
-
-	async listDriveFiles(folderId: string): Promise<DriveFile[]> {
-		const files: DriveFile[] = [];
-		let pageToken: string | undefined;
-
-		do {
-			const query = `'${folderId}' in parents and trashed=false`;
-			let url = `files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,md5Checksum,parents)`;
-			if (pageToken) {
-				url += `&pageToken=${pageToken}`;
-			}
-
-			const result = await this.driveRequest(url);
-			if (result.files) {
-				files.push(...result.files);
-			}
-			pageToken = result.nextPageToken;
-		} while (pageToken);
-
-		return files;
-	}
-
-	async downloadFile(fileId: string): Promise<string> {
-		const token = await this.getValidAccessToken();
-		if (!token) {
-			throw new Error("Not authenticated");
-		}
-
-		const response = await requestUrl({
-			url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-			method: "GET",
-			headers: {
-				Authorization: `Bearer ${token}`,
-			},
-		});
-
-		return response.text;
-	}
-
-	async uploadFile(
-		name: string,
-		content: string,
-		parentId: string,
-		existingFileId?: string
-	): Promise<string> {
-		const token = await this.getValidAccessToken();
-		if (!token) {
-			throw new Error("Not authenticated");
-		}
-
-		const metadata = {
-			name,
-			...(existingFileId ? {} : { parents: [parentId] }),
-		};
-
-		const boundary = "-------314159265358979323846";
-		const delimiter = "\r\n--" + boundary + "\r\n";
-		const closeDelim = "\r\n--" + boundary + "--";
-
-		const body =
-			delimiter +
-			"Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-			JSON.stringify(metadata) +
-			delimiter +
-			"Content-Type: text/markdown\r\n\r\n" +
-			content +
-			closeDelim;
-
-		const url = existingFileId
-			? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id`
-			: `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`;
-
-		const response = await requestUrl({
-			url,
-			method: existingFileId ? "PATCH" : "POST",
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"Content-Type": `multipart/related; boundary="${boundary}"`,
-			},
-			body,
-		});
-
-		return response.json.id;
-	}
-
-	// =========================================================================
-	// Sync Operations
-	// =========================================================================
-
-	private syncStats = { processed: 0, downloaded: 0, skipped: 0, total: 0 };
-	private syncCancelled = false;
-	private isSyncing = false;
-	private currentNotice: Notice | null = null;
-	private noticeContent: {
-		label: HTMLDivElement;
-		progressFill: HTMLDivElement;
-		progressText: HTMLDivElement;
-	} | null = null;
-
-	private showProgressNotice() {
-		// If notice exists and is still in DOM, just return
-		if (this.currentNotice && document.body.contains(this.currentNotice.noticeEl)) {
-			return;
-		}
-
-		// Create new progress notice
-		const noticeEl = document.createDocumentFragment();
-		const container = noticeEl.createDiv({ cls: "vectrola-sync-progress-container" });
-
-		const headerRow = container.createDiv({ cls: "vectrola-sync-progress-header" });
-		const label = headerRow.createDiv({ cls: "vectrola-sync-progress-label", text: "🔄 Syncing..." });
-		const cancelBtn = headerRow.createEl("button", { cls: "vectrola-cancel-btn", text: "✕" });
-
-		const progressBar = container.createDiv({ cls: "vectrola-sync-progress-bar" });
-		const progressFill = progressBar.createDiv({ cls: "vectrola-sync-progress-fill" });
-		const progressText = container.createDiv({ cls: "vectrola-sync-progress-text", text: "0/0" });
-
-		this.currentNotice = new Notice(noticeEl, 0);
-		this.noticeContent = { label, progressFill, progressText };
-
-		// Cancel button handler
-		cancelBtn.onclick = (e) => {
-			e.stopPropagation();
-			this.syncCancelled = true;
-			this.currentNotice?.hide();
-			this.currentNotice = null;
-			this.noticeContent = null;
-			new Notice("🚫 Sync cancelled");
-		};
-
-		// Update with current progress
-		this.updateProgressDisplay();
-	}
-
-	private updateProgressDisplay() {
-		if (!this.noticeContent) return;
-
-		const { label, progressFill, progressText } = this.noticeContent;
-		const current = this.syncStats.processed;
-		const total = this.syncStats.total;
-		const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-
-		label.textContent = `⬇️ ${this.syncStats.downloaded} ⏭️ ${this.syncStats.skipped}`;
-		(progressFill as HTMLElement).setCssStyles({ width: `${pct}%` });
-		progressText.textContent = `${current}/${total}`;
-	}
-
-	async syncFromDrive() {
-		if (!this.isAuthenticated()) {
-			new Notice("Please sign in with Google Drive first.");
-			return;
-		}
-
-		// Check if wiki folder is discovered
-		if (!this.settings.wikiFolderId) {
-			new Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
-			return;
-		}
-
-		// If already syncing, just show the progress notice
-		if (this.isSyncing) {
-			this.showProgressNotice();
-			return;
-		}
-
-		// Start sync
-		this.isSyncing = true;
-		this.syncCancelled = false;
-		this.syncStats = { processed: 0, downloaded: 0, skipped: 0, total: 0 };
-
-		this.showProgressNotice();
-		if (this.noticeContent) {
-			this.noticeContent.label.textContent = "🔄 Connecting...";
-		}
-
-		try {
-			// Use wiki folder ID (auto-discovered from /Vectrola/wiki)
-			const folderId = this.settings.wikiFolderId;
-
-			if (this.syncCancelled) { this.isSyncing = false; return; }
-
-			// Phase 1: Collect all files (fast - just API listing)
-			if (this.noticeContent) {
-				this.noticeContent.label.textContent = "🔄 Scanning folders...";
-			}
-			const allFiles = await this.collectDriveFiles(folderId, "");
-			this.syncStats.total = allFiles.length;
-			this.updateProgressDisplay();
-
-			if (this.syncCancelled) { this.isSyncing = false; return; }
-
-			// Phase 2: Download files in parallel batches of 10
-			if (this.noticeContent) {
-				this.noticeContent.label.textContent = "🔄 Downloading...";
-			}
-			await this.downloadFileBatch(allFiles, 10, () => this.updateProgressDisplay());
-
-			if (this.syncCancelled) { this.isSyncing = false; return; }
-
-			this.settings.lastSyncTime = Date.now();
-			await this.saveSettings();
-
-			this.currentNotice?.hide();
-			this.currentNotice = null;
-			this.noticeContent = null;
-
-			if (this.syncStats.skipped > 0) {
-				new Notice(`✅ Sync complete! ${this.syncStats.downloaded} downloaded, ${this.syncStats.skipped} skipped`);
-			} else {
-				new Notice(`✅ Sync complete! ${this.syncStats.downloaded} files downloaded`);
-			}
-		} catch (error) {
-			if (!this.syncCancelled) {
-				console.error("Sync failed:", error);
-				this.currentNotice?.hide();
-				new Notice(`❌ Sync failed: ${error.message}`);
-			}
-			this.currentNotice = null;
-			this.noticeContent = null;
-		} finally {
-			this.isSyncing = false;
-		}
-	}
-
-	// Phase 1: Collect all files recursively (no downloads, just listing)
-	async collectDriveFiles(
-		folderId: string,
-		localPath: string
-	): Promise<Array<{ file: DriveFile; localPath: string }>> {
-		if (this.syncCancelled) return [];
-
-		const result: Array<{ file: DriveFile; localPath: string }> = [];
-		const driveFiles = await this.listDriveFiles(folderId);
-
-		for (const file of driveFiles) {
-			if (this.syncCancelled) return result;
-
-			const filePath = localPath ? `${localPath}/${file.name}` : file.name;
-
-			if (file.mimeType === "application/vnd.google-apps.folder") {
-				// Create local folder if it doesn't exist
-				const folder = this.app.vault.getAbstractFileByPath(filePath);
-				if (!folder) {
-					try {
-						await this.app.vault.createFolder(filePath);
-					} catch {
-						// Folder may already exist, ignore
-					}
-				}
-				// Recurse into subfolder
-				const subFiles = await this.collectDriveFiles(file.id, filePath);
-				result.push(...subFiles);
-			} else if (file.name.endsWith(".md")) {
-				result.push({ file, localPath: filePath });
-			}
-		}
-
-		return result;
-	}
-
-	// Phase 2: Download files in parallel batches
-	async downloadFileBatch(
-		files: Array<{ file: DriveFile; localPath: string }>,
-		concurrency: number = 10,
-		onProgress?: () => void
-	) {
-		// Process in batches for controlled concurrency
-		for (let i = 0; i < files.length; i += concurrency) {
-			if (this.syncCancelled) return;
-
-			const batch = files.slice(i, i + concurrency);
-			await Promise.all(
-				batch.map(async ({ file, localPath }) => {
-					if (this.syncCancelled) return;
-
-					try {
-						// First check cache (fast path)
-						const cachedHash = this.settings.syncCache[localPath];
-						if (cachedHash && file.md5Checksum && cachedHash === file.md5Checksum) {
-							// File unchanged per cache, skip download
-							this.syncStats.processed++;
-							this.syncStats.skipped++;
-							onProgress?.();
-							return;
-						}
-
-						// Cache miss - check if local file exists and compare MD5 directly
-						const existingFile = this.app.vault.getAbstractFileByPath(localPath);
-						if (existingFile instanceof TFile && file.md5Checksum) {
-							const localContent = await this.app.vault.read(existingFile);
-							const localHash = SparkMD5.hash(localContent);
-
-							if (localHash === file.md5Checksum) {
-								// Local file matches Drive, skip download and update cache
-								this.syncStats.processed++;
-								this.syncStats.skipped++;
-								this.settings.syncCache[localPath] = file.md5Checksum;
-								onProgress?.();
-								return;
-							}
-						}
-
-						// File missing or different - download it
-						const content = await this.downloadFile(file.id);
-
-						if (existingFile instanceof TFile) {
-							await this.app.vault.modify(existingFile, content);
-						} else {
-							// Create new file
-							try {
-								await this.app.vault.create(localPath, content);
-							} catch {
-								// File may already exist, try to modify instead
-								const retryFile = this.app.vault.getAbstractFileByPath(localPath);
-								if (retryFile instanceof TFile) {
-									await this.app.vault.modify(retryFile, content);
-								}
-							}
-						}
-
-						// Update cache with new hash
-						if (file.md5Checksum) {
-							this.settings.syncCache[localPath] = file.md5Checksum;
-						}
-
-						this.syncStats.processed++;
-						this.syncStats.downloaded++;
-						onProgress?.();
-					} catch (error) {
-						console.error(`Failed to download ${localPath}:`, error);
-						this.syncStats.processed++;
-						onProgress?.();
-					}
-				})
-			);
-		}
-	}
-
-	async syncToDrive() {
-		if (!this.isAuthenticated()) {
-			new Notice("Please sign in with Google Drive first.");
-			return;
-		}
-
-		// Check if wiki folder is discovered
-		if (!this.settings.wikiFolderId) {
-			new Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
-			return;
-		}
-
-		new Notice("Pushing to Google Drive...");
-
-		try {
-			// Use wiki folder ID (auto-discovered from /Vectrola/wiki)
-			const folderId = this.settings.wikiFolderId;
-
-			// Get all markdown files in vault
-			const files = this.app.vault.getMarkdownFiles();
-			let uploaded = 0;
-
-			for (const file of files) {
-				const content = await this.app.vault.read(file);
-
-				// Find parent folder in Drive (relative to selected folder)
-				const parentPath = file.parent?.path || "";
-				let parentFolderId = folderId;
-
-				if (parentPath) {
-					// Create nested folders within the selected folder
-					parentFolderId = await this.findOrCreateFolderInParent(folderId, parentPath);
-				}
-
-				// Check if file exists in Drive
-				const query = `name='${file.name}' and '${parentFolderId}' in parents and trashed=false`;
-				const existing = await this.driveRequest(
-					`files?q=${encodeURIComponent(query)}&fields=files(id)`
-				);
-
-				const existingId = existing.files?.[0]?.id;
-				await this.uploadFile(file.name, content, parentFolderId, existingId);
-				uploaded++;
-			}
-
-			this.settings.lastSyncTime = Date.now();
-			await this.saveSettings();
-
-			new Notice(`Pushed ${uploaded} files to Google Drive!`);
-		} catch (error) {
-			console.error("Push failed:", error);
-			new Notice(`Push failed: ${error.message}`);
-		}
-	}
-
-	// Helper to create nested folders within a parent folder
-	async findOrCreateFolderInParent(parentFolderId: string, relativePath: string): Promise<string> {
-		const parts = relativePath.split("/").filter((p) => p);
-		let currentParentId = parentFolderId;
-
-		for (const part of parts) {
-			// Search for existing folder
-			const query = `name='${part}' and '${currentParentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-			const searchResult = await this.driveRequest(
-				`files?q=${encodeURIComponent(query)}&fields=files(id,name)`
-			);
-
-			if (searchResult.files && searchResult.files.length > 0) {
-				currentParentId = searchResult.files[0].id;
-			} else {
-				// Create folder
-				const metadata = {
-					name: part,
-					mimeType: "application/vnd.google-apps.folder",
-					parents: [currentParentId],
-				};
-
-				const created = await this.driveRequest(
-					"files?fields=id",
-					"POST",
-					JSON.stringify(metadata),
-					"application/json"
-				);
-				currentParentId = created.id;
-			}
-		}
-
-		return currentParentId;
-	}
-}
-
-// =============================================================================
-// Settings Tab
-// =============================================================================
-
-class VectrolaSyncSettingTab extends PluginSettingTab {
-	plugin: VectrolaSyncPlugin;
-	private authStateHandler: () => void;
-
-	constructor(app: App, plugin: VectrolaSyncPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-
-		// Listen for auth state changes to refresh the UI
-		this.authStateHandler = () => this.display();
-		this.plugin.events.on("auth-state-changed", this.authStateHandler);
-	}
-
-	hide(): void {
-		// Cleanup event listener when settings tab is closed
-		this.plugin.events.off("auth-state-changed", this.authStateHandler);
-	}
-
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-
-		// Connection Status
-		new Setting(containerEl).setName("Connection").setHeading();
-
-		if (this.plugin.isAuthenticated()) {
-			const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
-			const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
-			statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "✅" });
-			const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
-			statusText.createEl("div", { cls: "vectrola-status-title", text: "Connected to Google Drive" });
-			if (this.plugin.settings.userEmail) {
-				statusText.createEl("div", { cls: "vectrola-status-subtitle", text: this.plugin.settings.userEmail });
-			}
-
-			new Setting(containerEl)
-				.setName("Sign out")
-				.setDesc("Disconnect from Google Drive")
-				.addButton((btn) =>
-					btn
-						.setButtonText("Sign Out")
-						.setWarning()
-						.onClick(async () => {
-							await this.plugin.signOut();
-							this.display();
-						})
-				);
-		} else if (this.plugin.hasTokensOnly()) {
-			// Partially authenticated - has tokens but wiki folder not found
-			const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
-			const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
-			statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "⚠️" });
-			const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
-			statusText.createEl("div", { cls: "vectrola-status-title", text: "Wiki folder not found" });
-			statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Run 'vectrola wiki --sync' in terminal first" });
-
-			new Setting(containerEl)
-				.setName("Retry")
-				.setDesc("Try to find Vectrola folders again")
-				.addButton((btn) =>
-					btn
-						.setButtonText("Retry")
-						.setCta()
-						.onClick(async () => {
-							await this.plugin.retryFolderDiscovery();
-							this.display();
-						})
-				);
-
-			new Setting(containerEl)
-				.setName("Sign out")
-				.setDesc("Start over with a different account")
-				.addButton((btn) =>
-					btn
-						.setButtonText("Sign Out")
-						.onClick(async () => {
-							await this.plugin.signOut();
-							this.display();
-						})
-				);
-		} else {
-			const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
-			const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
-			statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "🔗" });
-			const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
-			statusText.createEl("div", { cls: "vectrola-status-title", text: "Not connected" });
-			statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Sign in to sync your music wiki" });
-
-			new Setting(containerEl)
-				.setName("Sign in with Google")
-				.setDesc("Connect to Google Drive to sync your wiki")
-				.addButton((btn) =>
-					btn
-						.setButtonText("Sign in with Google")
-						.setCta()
-						.onClick(async () => {
-							await this.plugin.authenticate();
-							this.display();
-						})
-				);
-		}
-
-		// Sync Options
-		new Setting(containerEl).setName("Synchronization").setHeading();
-
-		// Show wiki folder status
-		if (this.plugin.settings.wikiFolderId) {
-			new Setting(containerEl)
-				.setName("Wiki folder")
-				.setDesc("✓ Connected to /Vectrola/wiki")
-				.addButton((btn) =>
-					btn
-						.setButtonText("Refresh")
-						.onClick(async () => {
-							await this.plugin.retryFolderDiscovery();
-							this.display();
-						})
-				);
-		}
-
-		new Setting(containerEl)
-			.setName("Auto-sync on open")
-			.setDesc("Automatically pull from Drive when vault opens")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.autoSyncOnOpen)
-					.onChange(async (value) => {
-						this.plugin.settings.autoSyncOnOpen = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Sync interval (minutes)")
-			.setDesc("How often to sync automatically (0 to disable)")
-			.addText((text) =>
-				text
-					.setPlaceholder("5")
-					.setValue(String(this.plugin.settings.syncIntervalMinutes))
-					.onChange(async (value) => {
-						const num = parseInt(value) || 0;
-						this.plugin.settings.syncIntervalMinutes = num;
-						await this.plugin.saveSettings();
-						this.plugin.setupSyncInterval();
-					})
-			);
-
-		// Manual Sync
-		new Setting(containerEl).setName("Manual Sync").setHeading();
-
-		new Setting(containerEl)
-			.setName("Pull from Drive")
-			.setDesc("Download latest wiki from Google Drive")
-			.addButton((btn) =>
-				btn.setButtonText("Pull").onClick(async () => {
-					await this.plugin.syncFromDrive();
-				})
-			);
-
-		new Setting(containerEl)
-			.setName("Push to Drive")
-			.setDesc("Upload current vault to Google Drive")
-			.addButton((btn) =>
-				btn.setButtonText("Push").onClick(async () => {
-					await this.plugin.syncToDrive();
-				})
-			);
-
-		// Last sync time
-		if (this.plugin.settings.lastSyncTime > 0) {
-			const lastSync = new Date(this.plugin.settings.lastSyncTime).toLocaleString();
-			containerEl.createEl("p", {
-				text: `Last synced: ${lastSync}`,
-				cls: "setting-item-description",
-			});
-		}
 	}
 }

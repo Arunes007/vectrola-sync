@@ -473,8 +473,7 @@ __export(main_exports, {
   default: () => VectrolaSyncPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian = require("obsidian");
-var SparkMD5 = __toESM(require_spark_md5());
+var import_obsidian5 = require("obsidian");
 
 // src/icons.ts
 var ICONS = {
@@ -585,7 +584,8 @@ var DEFAULT_SETTINGS = {
   audioFolderId: ""
 };
 
-// src/main.ts
+// src/auth.ts
+var import_obsidian = require("obsidian");
 function generateCodeVerifier() {
   const array = new Uint8Array(32);
   crypto.getRandomValues(array);
@@ -609,69 +609,787 @@ function base64UrlEncode(buffer) {
   }
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
+function createAuthManager(deps) {
+  let pendingAuthState = null;
+  const isAuthenticated = () => {
+    return !!(deps.settings.accessToken && deps.settings.wikiFolderId);
+  };
+  const hasTokensOnly = () => {
+    return !!(deps.settings.accessToken && !deps.settings.wikiFolderId);
+  };
+  const authenticate = async () => {
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    const state = generateRandomState();
+    pendingAuthState = state;
+    try {
+      await (0, import_obsidian.requestUrl)({
+        url: `${OAUTH_SERVER}/auth/start`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state, code_verifier: codeVerifier })
+      });
+    } catch (error) {
+      console.error("Failed to start auth session:", error);
+      new import_obsidian.Notice("Failed to connect to auth server. Please try again.");
+      pendingAuthState = null;
+      return;
+    }
+    let authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(GOOGLE_CLIENT_ID)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(SCOPES)}&access_type=offline&prompt=consent&code_challenge=${codeChallenge}&code_challenge_method=S256&state=${state}`;
+    if (deps.settings.userEmail) {
+      authUrl += `&login_hint=${encodeURIComponent(deps.settings.userEmail)}`;
+    }
+    try {
+      const { shell } = require("electron");
+      shell.openExternal(authUrl);
+    } catch (e) {
+      window.open(authUrl);
+    }
+    new import_obsidian.Notice("\u{1F510} Complete sign-in in your browser...");
+  };
+  const getUserInfo = async (accessToken) => {
+    const response = await (0, import_obsidian.requestUrl)({
+      url: "https://www.googleapis.com/oauth2/v2/userinfo",
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+    return response.json;
+  };
+  const resolveDrivePath = async (path) => {
+    if (path === "/" || path === "")
+      return "root";
+    const parts = path.replace(/^\/+|\/+$/g, "").split("/");
+    let currentId = "root";
+    for (const part of parts) {
+      const query = `name='${part}' and '${currentId}' in parents and trashed=false`;
+      const response = await deps.driveRequest(
+        `files?q=${encodeURIComponent(query)}&fields=files(id)`
+      );
+      const files = (response == null ? void 0 : response.files) || [];
+      if (files.length === 0)
+        return null;
+      currentId = files[0].id;
+    }
+    return currentId;
+  };
+  const handleOAuthCallback = async (params) => {
+    const { access_token, refresh_token, expires_in, state, error } = params;
+    if (state !== pendingAuthState) {
+      console.error("OAuth state mismatch:", { expected: pendingAuthState, received: state });
+      new import_obsidian.Notice("\u274C Authentication failed: Invalid session. Please try again.");
+      return;
+    }
+    pendingAuthState = null;
+    if (error || !access_token) {
+      new import_obsidian.Notice(`\u274C Authentication failed: ${error || "No token received"}`);
+      return;
+    }
+    deps.settings.accessToken = access_token;
+    if (refresh_token) {
+      deps.settings.refreshToken = refresh_token;
+    }
+    deps.settings.tokenExpiry = Date.now() + parseInt(expires_in) * 1e3;
+    try {
+      const userInfo = await getUserInfo(access_token);
+      if (userInfo.email) {
+        deps.settings.userEmail = userInfo.email;
+      }
+    } catch (e) {
+    }
+    await deps.saveSettings();
+    new import_obsidian.Notice("\u{1F50D} Looking for Vectrola folders...");
+    try {
+      const wikiId = await resolveDrivePath("/Vectrola/wiki");
+      const audioId = await resolveDrivePath("/Vectrola/audio");
+      if (!wikiId) {
+        new import_obsidian.Notice("\u274C /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first to create it.", 8e3);
+        return;
+      }
+      deps.settings.wikiFolderId = wikiId;
+      deps.settings.audioFolderId = audioId || "";
+      await deps.saveSettings();
+      deps.setupSyncInterval();
+      deps.events.trigger("auth-state-changed");
+      new import_obsidian.Notice("\u2705 Connected to Vectrola folders!");
+    } catch (e) {
+      console.error("Failed to resolve Vectrola folders:", e);
+      new import_obsidian.Notice("\u274C Failed to find Vectrola folders. Run 'vectrola wiki --sync' first.");
+    }
+  };
+  const retryFolderDiscovery = async () => {
+    if (!deps.settings.accessToken) {
+      new import_obsidian.Notice("Please sign in first.");
+      return;
+    }
+    new import_obsidian.Notice("\u{1F50D} Looking for Vectrola folders...");
+    try {
+      const wikiId = await resolveDrivePath("/Vectrola/wiki");
+      const audioId = await resolveDrivePath("/Vectrola/audio");
+      if (!wikiId) {
+        new import_obsidian.Notice("\u274C /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first.", 8e3);
+        return;
+      }
+      deps.settings.wikiFolderId = wikiId;
+      deps.settings.audioFolderId = audioId || "";
+      await deps.saveSettings();
+      deps.setupSyncInterval();
+      deps.events.trigger("auth-state-changed");
+      new import_obsidian.Notice("\u2705 Found Vectrola folders!");
+    } catch (e) {
+      console.error("Failed to resolve Vectrola folders:", e);
+      new import_obsidian.Notice("\u274C Failed to find Vectrola folders.");
+    }
+  };
+  const refreshAccessToken = async () => {
+    if (!deps.settings.refreshToken) {
+      return false;
+    }
+    try {
+      const response = await (0, import_obsidian.requestUrl)({
+        url: `${OAUTH_SERVER}/auth/refresh`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: deps.settings.refreshToken })
+      });
+      const tokens = response.json;
+      if (tokens.error) {
+        throw new Error(tokens.error);
+      }
+      deps.settings.accessToken = tokens.access_token;
+      deps.settings.tokenExpiry = Date.now() + tokens.expires_in * 1e3;
+      await deps.saveSettings();
+      return true;
+    } catch (error) {
+      console.error("Token refresh failed:", error);
+      return false;
+    }
+  };
+  const getValidAccessToken = async () => {
+    if (Date.now() > deps.settings.tokenExpiry - 6e4) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        new import_obsidian.Notice("Session expired. Please sign in again.");
+        return null;
+      }
+    }
+    return deps.settings.accessToken;
+  };
+  const signOut = async () => {
+    deps.settings.accessToken = "";
+    deps.settings.refreshToken = "";
+    deps.settings.tokenExpiry = 0;
+    deps.settings.userEmail = "";
+    deps.settings.wikiFolderId = "";
+    deps.settings.audioFolderId = "";
+    await deps.saveSettings();
+    deps.clearSyncInterval();
+    deps.events.trigger("auth-state-changed");
+    new import_obsidian.Notice("Signed out from Google Drive.");
+  };
+  return {
+    authenticate,
+    handleOAuthCallback,
+    refreshAccessToken,
+    getValidAccessToken,
+    signOut,
+    isAuthenticated,
+    hasTokensOnly,
+    getUserInfo,
+    resolveDrivePath,
+    retryFolderDiscovery
+  };
+}
+
+// src/drive-api.ts
+var import_obsidian2 = require("obsidian");
+function createDriveClient(getToken) {
+  const driveRequest = async (endpoint, method = "GET", body, contentType) => {
+    const token = await getToken();
+    if (!token) {
+      throw new Error("Not authenticated");
+    }
+    const headers = {
+      Authorization: `Bearer ${token}`
+    };
+    if (contentType) {
+      headers["Content-Type"] = contentType;
+    }
+    const response = await (0, import_obsidian2.requestUrl)({
+      url: `https://www.googleapis.com/drive/v3/${endpoint}`,
+      method,
+      headers,
+      body
+    });
+    return response.json;
+  };
+  const findOrCreateFolder = async (path) => {
+    const parts = path.split("/").filter((p) => p);
+    let parentId = "root";
+    for (const part of parts) {
+      const query = `name='${part}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+      const searchResult = await driveRequest(
+        `files?q=${encodeURIComponent(query)}&fields=files(id,name)`
+      );
+      if (searchResult.files && searchResult.files.length > 0) {
+        parentId = searchResult.files[0].id;
+      } else {
+        const metadata = {
+          name: part,
+          mimeType: "application/vnd.google-apps.folder",
+          parents: [parentId]
+        };
+        const created = await driveRequest(
+          "files?fields=id",
+          "POST",
+          JSON.stringify(metadata),
+          "application/json"
+        );
+        parentId = created.id;
+      }
+    }
+    return parentId;
+  };
+  const listDriveFiles = async (folderId) => {
+    const files = [];
+    let pageToken;
+    do {
+      const query = `'${folderId}' in parents and trashed=false`;
+      let url = `files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,md5Checksum,parents)`;
+      if (pageToken) {
+        url += `&pageToken=${pageToken}`;
+      }
+      const result = await driveRequest(url);
+      if (result.files) {
+        files.push(...result.files);
+      }
+      pageToken = result.nextPageToken;
+    } while (pageToken);
+    return files;
+  };
+  const downloadFile = async (fileId) => {
+    const token = await getToken();
+    if (!token) {
+      throw new Error("Not authenticated");
+    }
+    const response = await (0, import_obsidian2.requestUrl)({
+      url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    return response.text;
+  };
+  const downloadFileBuffer = async (fileId) => {
+    const token = await getToken();
+    if (!token) {
+      throw new Error("Not authenticated with Google Drive");
+    }
+    const response = await (0, import_obsidian2.requestUrl)({
+      url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    return response.arrayBuffer;
+  };
+  const uploadFile = async (name, content, parentId, existingFileId) => {
+    const token = await getToken();
+    if (!token) {
+      throw new Error("Not authenticated");
+    }
+    const metadata = {
+      name,
+      ...existingFileId ? {} : { parents: [parentId] }
+    };
+    const boundary = "-------314159265358979323846";
+    const delimiter = "\r\n--" + boundary + "\r\n";
+    const closeDelim = "\r\n--" + boundary + "--";
+    const body = delimiter + "Content-Type: application/json; charset=UTF-8\r\n\r\n" + JSON.stringify(metadata) + delimiter + "Content-Type: text/markdown\r\n\r\n" + content + closeDelim;
+    const url = existingFileId ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id` : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`;
+    const response = await (0, import_obsidian2.requestUrl)({
+      url,
+      method: existingFileId ? "PATCH" : "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary="${boundary}"`
+      },
+      body
+    });
+    return response.json.id;
+  };
+  return {
+    driveRequest,
+    findOrCreateFolder,
+    listDriveFiles,
+    downloadFile,
+    downloadFileBuffer,
+    uploadFile
+  };
+}
+
+// src/sync.ts
+var import_obsidian3 = require("obsidian");
+var SparkMD5 = __toESM(require_spark_md5());
+function createSyncEngine(deps) {
+  let syncStats = { processed: 0, downloaded: 0, skipped: 0, total: 0 };
+  let syncCancelled = false;
+  let syncing = false;
+  let currentNotice = null;
+  let noticeContent = null;
+  const showProgressNotice = () => {
+    if (currentNotice && document.body.contains(currentNotice.noticeEl)) {
+      return;
+    }
+    const noticeEl = document.createDocumentFragment();
+    const container = noticeEl.createDiv({ cls: "vectrola-sync-progress-container" });
+    const headerRow = container.createDiv({ cls: "vectrola-sync-progress-header" });
+    const label = headerRow.createDiv({ cls: "vectrola-sync-progress-label", text: "\u{1F504} Syncing..." });
+    const cancelBtn = headerRow.createEl("button", { cls: "vectrola-cancel-btn", text: "\u2715" });
+    const progressBar = container.createDiv({ cls: "vectrola-sync-progress-bar" });
+    const progressFill = progressBar.createDiv({ cls: "vectrola-sync-progress-fill" });
+    const progressText = container.createDiv({ cls: "vectrola-sync-progress-text", text: "0/0" });
+    currentNotice = new import_obsidian3.Notice(noticeEl, 0);
+    noticeContent = { label, progressFill, progressText };
+    cancelBtn.onclick = (e) => {
+      e.stopPropagation();
+      syncCancelled = true;
+      currentNotice == null ? void 0 : currentNotice.hide();
+      currentNotice = null;
+      noticeContent = null;
+      new import_obsidian3.Notice("\u{1F6AB} Sync cancelled");
+    };
+    updateProgressDisplay();
+  };
+  const updateProgressDisplay = () => {
+    if (!noticeContent)
+      return;
+    const { label, progressFill, progressText } = noticeContent;
+    const current = syncStats.processed;
+    const total = syncStats.total;
+    const pct = total > 0 ? Math.round(current / total * 100) : 0;
+    label.textContent = `\u2B07\uFE0F ${syncStats.downloaded} \u23ED\uFE0F ${syncStats.skipped}`;
+    progressFill.setCssStyles({ width: `${pct}%` });
+    progressText.textContent = `${current}/${total}`;
+  };
+  const collectDriveFiles = async (folderId, localPath) => {
+    if (syncCancelled)
+      return [];
+    const result = [];
+    const driveFiles = await deps.driveClient.listDriveFiles(folderId);
+    for (const file of driveFiles) {
+      if (syncCancelled)
+        return result;
+      const filePath = localPath ? `${localPath}/${file.name}` : file.name;
+      if (file.mimeType === "application/vnd.google-apps.folder") {
+        const folder = deps.app.vault.getAbstractFileByPath(filePath);
+        if (!folder) {
+          try {
+            await deps.app.vault.createFolder(filePath);
+          } catch (e) {
+          }
+        }
+        const subFiles = await collectDriveFiles(file.id, filePath);
+        result.push(...subFiles);
+      } else if (file.name.endsWith(".md")) {
+        result.push({ file, localPath: filePath });
+      }
+    }
+    return result;
+  };
+  const downloadFileBatch = async (files, concurrency = 10, onProgress) => {
+    for (let i = 0; i < files.length; i += concurrency) {
+      if (syncCancelled)
+        return;
+      const batch = files.slice(i, i + concurrency);
+      await Promise.all(
+        batch.map(async ({ file, localPath }) => {
+          if (syncCancelled)
+            return;
+          try {
+            const cachedHash = deps.settings.syncCache[localPath];
+            if (cachedHash && file.md5Checksum && cachedHash === file.md5Checksum) {
+              syncStats.processed++;
+              syncStats.skipped++;
+              onProgress == null ? void 0 : onProgress();
+              return;
+            }
+            const existingFile = deps.app.vault.getAbstractFileByPath(localPath);
+            if (existingFile instanceof import_obsidian3.TFile && file.md5Checksum) {
+              const localContent = await deps.app.vault.read(existingFile);
+              const localHash = SparkMD5.hash(localContent);
+              if (localHash === file.md5Checksum) {
+                syncStats.processed++;
+                syncStats.skipped++;
+                deps.settings.syncCache[localPath] = file.md5Checksum;
+                onProgress == null ? void 0 : onProgress();
+                return;
+              }
+            }
+            const content = await deps.driveClient.downloadFile(file.id);
+            if (existingFile instanceof import_obsidian3.TFile) {
+              await deps.app.vault.modify(existingFile, content);
+            } else {
+              try {
+                await deps.app.vault.create(localPath, content);
+              } catch (e) {
+                const retryFile = deps.app.vault.getAbstractFileByPath(localPath);
+                if (retryFile instanceof import_obsidian3.TFile) {
+                  await deps.app.vault.modify(retryFile, content);
+                }
+              }
+            }
+            if (file.md5Checksum) {
+              deps.settings.syncCache[localPath] = file.md5Checksum;
+            }
+            syncStats.processed++;
+            syncStats.downloaded++;
+            onProgress == null ? void 0 : onProgress();
+          } catch (error) {
+            console.error(`Failed to download ${localPath}:`, error);
+            syncStats.processed++;
+            onProgress == null ? void 0 : onProgress();
+          }
+        })
+      );
+    }
+  };
+  const findOrCreateFolderInParent = async (parentFolderId, relativePath) => {
+    const parts = relativePath.split("/").filter((p) => p);
+    let currentParentId = parentFolderId;
+    for (const part of parts) {
+      const query = `name='${part}' and '${currentParentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+      const searchResult = await deps.driveClient.driveRequest(
+        `files?q=${encodeURIComponent(query)}&fields=files(id,name)`
+      );
+      if (searchResult.files && searchResult.files.length > 0) {
+        currentParentId = searchResult.files[0].id;
+      } else {
+        const metadata = {
+          name: part,
+          mimeType: "application/vnd.google-apps.folder",
+          parents: [currentParentId]
+        };
+        const created = await deps.driveClient.driveRequest(
+          "files?fields=id",
+          "POST",
+          JSON.stringify(metadata),
+          "application/json"
+        );
+        currentParentId = created.id;
+      }
+    }
+    return currentParentId;
+  };
+  const syncFromDrive = async () => {
+    if (!deps.isAuthenticated()) {
+      new import_obsidian3.Notice("Please sign in with Google Drive first.");
+      return;
+    }
+    if (!deps.settings.wikiFolderId) {
+      new import_obsidian3.Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
+      return;
+    }
+    if (syncing) {
+      showProgressNotice();
+      return;
+    }
+    syncing = true;
+    syncCancelled = false;
+    syncStats = { processed: 0, downloaded: 0, skipped: 0, total: 0 };
+    showProgressNotice();
+    if (noticeContent) {
+      noticeContent.label.textContent = "\u{1F504} Connecting...";
+    }
+    try {
+      const folderId = deps.settings.wikiFolderId;
+      if (syncCancelled) {
+        syncing = false;
+        return;
+      }
+      if (noticeContent) {
+        noticeContent.label.textContent = "\u{1F504} Scanning folders...";
+      }
+      const allFiles = await collectDriveFiles(folderId, "");
+      syncStats.total = allFiles.length;
+      updateProgressDisplay();
+      if (syncCancelled) {
+        syncing = false;
+        return;
+      }
+      if (noticeContent) {
+        noticeContent.label.textContent = "\u{1F504} Downloading...";
+      }
+      await downloadFileBatch(allFiles, 10, () => updateProgressDisplay());
+      if (syncCancelled) {
+        syncing = false;
+        return;
+      }
+      deps.settings.lastSyncTime = Date.now();
+      await deps.saveSettings();
+      currentNotice == null ? void 0 : currentNotice.hide();
+      currentNotice = null;
+      noticeContent = null;
+      if (syncStats.skipped > 0) {
+        new import_obsidian3.Notice(`\u2705 Sync complete! ${syncStats.downloaded} downloaded, ${syncStats.skipped} skipped`);
+      } else {
+        new import_obsidian3.Notice(`\u2705 Sync complete! ${syncStats.downloaded} files downloaded`);
+      }
+    } catch (error) {
+      if (!syncCancelled) {
+        console.error("Sync failed:", error);
+        currentNotice == null ? void 0 : currentNotice.hide();
+        new import_obsidian3.Notice(`\u274C Sync failed: ${error.message}`);
+      }
+      currentNotice = null;
+      noticeContent = null;
+    } finally {
+      syncing = false;
+    }
+  };
+  const syncToDrive = async () => {
+    var _a, _b, _c;
+    if (!deps.isAuthenticated()) {
+      new import_obsidian3.Notice("Please sign in with Google Drive first.");
+      return;
+    }
+    if (!deps.settings.wikiFolderId) {
+      new import_obsidian3.Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
+      return;
+    }
+    new import_obsidian3.Notice("Pushing to Google Drive...");
+    try {
+      const folderId = deps.settings.wikiFolderId;
+      const files = deps.app.vault.getMarkdownFiles();
+      let uploaded = 0;
+      for (const file of files) {
+        const content = await deps.app.vault.read(file);
+        const parentPath = ((_a = file.parent) == null ? void 0 : _a.path) || "";
+        let parentFolderId = folderId;
+        if (parentPath) {
+          parentFolderId = await findOrCreateFolderInParent(folderId, parentPath);
+        }
+        const query = `name='${file.name}' and '${parentFolderId}' in parents and trashed=false`;
+        const existing = await deps.driveClient.driveRequest(
+          `files?q=${encodeURIComponent(query)}&fields=files(id)`
+        );
+        const existingId = (_c = (_b = existing.files) == null ? void 0 : _b[0]) == null ? void 0 : _c.id;
+        await deps.driveClient.uploadFile(file.name, content, parentFolderId, existingId);
+        uploaded++;
+      }
+      deps.settings.lastSyncTime = Date.now();
+      await deps.saveSettings();
+      new import_obsidian3.Notice(`Pushed ${uploaded} files to Google Drive!`);
+    } catch (error) {
+      console.error("Push failed:", error);
+      new import_obsidian3.Notice(`Push failed: ${error.message}`);
+    }
+  };
+  return {
+    syncFromDrive,
+    syncToDrive,
+    isSyncing: () => syncing
+  };
+}
+
+// src/settings-tab.ts
+var import_obsidian4 = require("obsidian");
+var VectrolaSyncSettingTab = class extends import_obsidian4.PluginSettingTab {
+  constructor(app, plugin, deps) {
+    super(app, plugin);
+    this.deps = deps;
+    this.authStateHandler = () => this.display();
+    this.deps.events.on("auth-state-changed", this.authStateHandler);
+  }
+  hide() {
+    this.deps.events.off("auth-state-changed", this.authStateHandler);
+  }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    new import_obsidian4.Setting(containerEl).setName("Connection").setHeading();
+    if (this.deps.isAuthenticated()) {
+      const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
+      const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
+      statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "\u2705" });
+      const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
+      statusText.createEl("div", { cls: "vectrola-status-title", text: "Connected to Google Drive" });
+      if (this.deps.settings.userEmail) {
+        statusText.createEl("div", { cls: "vectrola-status-subtitle", text: this.deps.settings.userEmail });
+      }
+      new import_obsidian4.Setting(containerEl).setName("Sign out").setDesc("Disconnect from Google Drive").addButton(
+        (btn) => btn.setButtonText("Sign Out").setWarning().onClick(async () => {
+          await this.deps.signOut();
+          this.display();
+        })
+      );
+    } else if (this.deps.hasTokensOnly()) {
+      const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
+      const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
+      statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "\u26A0\uFE0F" });
+      const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
+      statusText.createEl("div", { cls: "vectrola-status-title", text: "Wiki folder not found" });
+      statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Run 'vectrola wiki --sync' in terminal first" });
+      new import_obsidian4.Setting(containerEl).setName("Retry").setDesc("Try to find Vectrola folders again").addButton(
+        (btn) => btn.setButtonText("Retry").setCta().onClick(async () => {
+          await this.deps.retryFolderDiscovery();
+          this.display();
+        })
+      );
+      new import_obsidian4.Setting(containerEl).setName("Sign out").setDesc("Start over with a different account").addButton(
+        (btn) => btn.setButtonText("Sign Out").onClick(async () => {
+          await this.deps.signOut();
+          this.display();
+        })
+      );
+    } else {
+      const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
+      const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
+      statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "\u{1F517}" });
+      const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
+      statusText.createEl("div", { cls: "vectrola-status-title", text: "Not connected" });
+      statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Sign in to sync your music wiki" });
+      new import_obsidian4.Setting(containerEl).setName("Sign in with Google").setDesc("Connect to Google Drive to sync your wiki").addButton(
+        (btn) => btn.setButtonText("Sign in with Google").setCta().onClick(async () => {
+          await this.deps.authenticate();
+          this.display();
+        })
+      );
+    }
+    new import_obsidian4.Setting(containerEl).setName("Synchronization").setHeading();
+    if (this.deps.settings.wikiFolderId) {
+      new import_obsidian4.Setting(containerEl).setName("Wiki folder").setDesc("\u2713 Connected to /Vectrola/wiki").addButton(
+        (btn) => btn.setButtonText("Refresh").onClick(async () => {
+          await this.deps.retryFolderDiscovery();
+          this.display();
+        })
+      );
+    }
+    new import_obsidian4.Setting(containerEl).setName("Auto-sync on open").setDesc("Automatically pull from Drive when vault opens").addToggle(
+      (toggle) => toggle.setValue(this.deps.settings.autoSyncOnOpen).onChange(async (value) => {
+        this.deps.settings.autoSyncOnOpen = value;
+        await this.deps.saveSettings();
+      })
+    );
+    new import_obsidian4.Setting(containerEl).setName("Sync interval (minutes)").setDesc("How often to sync automatically (0 to disable)").addText(
+      (text) => text.setPlaceholder("5").setValue(String(this.deps.settings.syncIntervalMinutes)).onChange(async (value) => {
+        const num = parseInt(value) || 0;
+        this.deps.settings.syncIntervalMinutes = num;
+        await this.deps.saveSettings();
+        this.deps.setupSyncInterval();
+      })
+    );
+    new import_obsidian4.Setting(containerEl).setName("Manual Sync").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Pull from Drive").setDesc("Download latest wiki from Google Drive").addButton(
+      (btn) => btn.setButtonText("Pull").onClick(async () => {
+        await this.deps.syncFromDrive();
+      })
+    );
+    new import_obsidian4.Setting(containerEl).setName("Push to Drive").setDesc("Upload current vault to Google Drive").addButton(
+      (btn) => btn.setButtonText("Push").onClick(async () => {
+        await this.deps.syncToDrive();
+      })
+    );
+    if (this.deps.settings.lastSyncTime > 0) {
+      const lastSync = new Date(this.deps.settings.lastSyncTime).toLocaleString();
+      containerEl.createEl("p", {
+        text: `Last synced: ${lastSync}`,
+        cls: "setting-item-description"
+      });
+    }
+  }
+};
+
+// src/main.ts
+var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
   constructor() {
     super(...arguments);
     this.syncInterval = null;
-    // Pending auth state for CSRF protection
-    this.pendingAuthState = null;
     // Event emitter for auth state changes
-    this.events = new import_obsidian.Events();
-    // =========================================================================
-    // Sync Operations
-    // =========================================================================
-    this.syncStats = { processed: 0, downloaded: 0, skipped: 0, total: 0 };
-    this.syncCancelled = false;
-    this.isSyncing = false;
-    this.currentNotice = null;
-    this.noticeContent = null;
+    this.events = new import_obsidian5.Events();
   }
   async onload() {
     await this.loadSettings();
+    this.drive = createDriveClient(() => this.auth.getValidAccessToken());
+    this.auth = createAuthManager({
+      settings: this.settings,
+      saveSettings: () => this.saveSettings(),
+      events: this.events,
+      driveRequest: (endpoint, method, body, contentType) => this.drive.driveRequest(endpoint, method, body, contentType),
+      setupSyncInterval: () => this.setupSyncInterval(),
+      clearSyncInterval: () => {
+        if (this.syncInterval) {
+          window.clearInterval(this.syncInterval);
+          this.syncInterval = null;
+        }
+      }
+    });
+    this.sync = createSyncEngine({
+      app: this.app,
+      driveClient: this.drive,
+      settings: this.settings,
+      saveSettings: () => this.saveSettings(),
+      isAuthenticated: () => this.auth.isAuthenticated()
+    });
     this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
-      this.handleOAuthCallback(params);
+      this.auth.handleOAuthCallback(params);
     });
     this.registerMarkdownCodeBlockProcessor("vectrola", (source, el, ctx) => {
       this.renderVectrolaPlayer(source, el);
     });
     this.api = {
-      fetchDriveFile: this.fetchDriveFile.bind(this),
-      isAuthenticated: this.isAuthenticated.bind(this)
+      fetchDriveFile: (id) => this.drive.downloadFileBuffer(id),
+      isAuthenticated: () => this.auth.isAuthenticated()
     };
     this.addRibbonIcon("refresh-cw", "Sync with Vectrola", async () => {
-      await this.syncFromDrive();
+      await this.sync.syncFromDrive();
     });
     this.addCommand({
       id: "vectrola-sync-pull",
       name: "Pull wiki from Google Drive",
       callback: async () => {
-        await this.syncFromDrive();
+        await this.sync.syncFromDrive();
       }
     });
     this.addCommand({
       id: "vectrola-sync-push",
       name: "Push wiki to Google Drive",
       callback: async () => {
-        await this.syncToDrive();
+        await this.sync.syncToDrive();
       }
     });
     this.addCommand({
       id: "vectrola-auth",
       name: "Sign in with Google Drive",
       callback: async () => {
-        await this.authenticate();
+        await this.auth.authenticate();
       }
     });
     this.addCommand({
       id: "vectrola-signout",
       name: "Sign out from Google Drive",
       callback: async () => {
-        await this.signOut();
+        await this.auth.signOut();
       }
     });
-    this.addSettingTab(new VectrolaSyncSettingTab(this.app, this));
-    if (this.settings.autoSyncOnOpen && this.isAuthenticated()) {
-      setTimeout(() => this.syncFromDrive(), 3e3);
+    this.addSettingTab(new VectrolaSyncSettingTab(this.app, this, {
+      settings: this.settings,
+      saveSettings: () => this.saveSettings(),
+      events: this.events,
+      isAuthenticated: () => this.auth.isAuthenticated(),
+      hasTokensOnly: () => this.auth.hasTokensOnly(),
+      authenticate: () => this.auth.authenticate(),
+      signOut: () => this.auth.signOut(),
+      retryFolderDiscovery: () => this.auth.retryFolderDiscovery(),
+      syncFromDrive: () => this.sync.syncFromDrive(),
+      syncToDrive: () => this.sync.syncToDrive(),
+      setupSyncInterval: () => this.setupSyncInterval()
+    }));
+    if (this.settings.autoSyncOnOpen && this.auth.isAuthenticated()) {
+      setTimeout(() => this.sync.syncFromDrive(), 3e3);
     }
     this.setupSyncInterval();
   }
@@ -690,19 +1408,12 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     if (this.syncInterval) {
       window.clearInterval(this.syncInterval);
     }
-    if (this.settings.syncIntervalMinutes > 0 && this.isAuthenticated()) {
+    if (this.settings.syncIntervalMinutes > 0 && this.auth.isAuthenticated()) {
       this.syncInterval = window.setInterval(
-        () => this.syncFromDrive(),
+        () => this.sync.syncFromDrive(),
         this.settings.syncIntervalMinutes * 60 * 1e3
       );
     }
-  }
-  isAuthenticated() {
-    return !!(this.settings.accessToken && this.settings.refreshToken && this.settings.wikiFolderId);
-  }
-  // Has tokens but wiki folder not discovered yet
-  hasTokensOnly() {
-    return !!(this.settings.accessToken && this.settings.refreshToken) && !this.settings.wikiFolderId;
   }
   // =========================================================================
   // Vectrola Audio Player Renderer
@@ -967,7 +1678,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     if (player.audio.src && player.audio.src.startsWith("blob:")) {
       URL.revokeObjectURL(player.audio.src);
     }
-    if (!import_obsidian.Platform.isMobile && sources.local) {
+    if (!import_obsidian5.Platform.isMobile && sources.local) {
       try {
         const os = require("os");
         const fs = require("fs");
@@ -999,12 +1710,12 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         console.warn("Local file access failed:", e);
       }
     }
-    if (!audioLoaded && import_obsidian.Platform.isMobile) {
+    if (!audioLoaded && import_obsidian5.Platform.isMobile) {
       const gdrivePath = (_b = (_a = sources.cloud) == null ? void 0 : _a.gdrive) == null ? void 0 : _b.path;
       if (gdrivePath) {
         const vaultPath = `audio/${gdrivePath}`;
         const file = this.app.vault.getAbstractFileByPath(vaultPath);
-        if (file instanceof import_obsidian.TFile) {
+        if (file instanceof import_obsidian5.TFile) {
           try {
             const buffer = await this.app.vault.readBinary(file);
             const blob = new Blob([buffer], { type: "audio/mpeg" });
@@ -1017,10 +1728,10 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         }
       }
     }
-    if (!audioLoaded && ((_d = (_c = sources.cloud) == null ? void 0 : _c.gdrive) == null ? void 0 : _d.file_id) && this.isAuthenticated()) {
+    if (!audioLoaded && ((_d = (_c = sources.cloud) == null ? void 0 : _c.gdrive) == null ? void 0 : _d.file_id) && this.auth.isAuthenticated()) {
       const gdriveId = sources.cloud.gdrive.file_id;
       try {
-        const arrayBuffer = await this.fetchDriveFile(gdriveId);
+        const arrayBuffer = await this.drive.downloadFileBuffer(gdriveId);
         const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
         player.audio.src = URL.createObjectURL(blob);
         audioLoaded = true;
@@ -1039,7 +1750,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         message += `File exists on: ${devices}
 `;
         message += `Re-ingest on this device: vectrola ingest <path>`;
-      } else if (hasCloudSources && !this.isAuthenticated()) {
+      } else if (hasCloudSources && !this.auth.isAuthenticated()) {
         message += `Available on Google Drive.
 `;
         message += `Sign in to Vectrola Sync to play.`;
@@ -1052,7 +1763,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
 `;
         message += `Re-ingest: vectrola ingest <path>`;
       }
-      new import_obsidian.Notice(message, 5e3);
+      new import_obsidian5.Notice(message, 5e3);
       return;
     }
     player.currentIndex = index;
@@ -1080,7 +1791,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       player.isPlaying = true;
     } catch (e) {
       console.error("Playback failed:", e);
-      new import_obsidian.Notice(`\u274C Playback failed: ${e.message}`);
+      new import_obsidian5.Notice(`\u274C Playback failed: ${e.message}`);
       return;
     }
     const titleEl = document.getElementById("vectrola-track-title");
@@ -1275,7 +1986,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     let bottomPx = margin;
     let leftPx = margin;
     let rightPx = margin;
-    if (import_obsidian.Platform.isMobileApp) {
+    if (import_obsidian5.Platform.isMobileApp) {
       const mobileNav = document.querySelector(".mobile-navbar");
       if (mobileNav) {
         const rect = mobileNav.getBoundingClientRect();
@@ -1306,7 +2017,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     const maxPlayerWidth = 800;
     const playerWidth = Math.min(availableWidth, maxPlayerWidth);
     const centeredLeft = leftPx + (availableWidth - playerWidth) / 2;
-    const bottomValue = import_obsidian.Platform.isMobileApp ? `calc(${bottomPx}px + env(safe-area-inset-bottom, 0px))` : `${bottomPx}px`;
+    const bottomValue = import_obsidian5.Platform.isMobileApp ? `calc(${bottomPx}px + env(safe-area-inset-bottom, 0px))` : `${bottomPx}px`;
     return {
       bottom: bottomValue,
       left: `${Math.max(centeredLeft, margin)}px`,
@@ -1574,7 +2285,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     playerBar = document.createElement("div");
     playerBar.id = "vectrola-global-player";
     const pos = this.calculatePlayerPosition();
-    if (import_obsidian.Platform.isMobile) {
+    if (import_obsidian5.Platform.isMobile) {
       playerBar.setCssStyles({
         position: "fixed",
         bottom: pos.bottom,
@@ -1900,7 +2611,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     }
     const updatePosition = () => {
       const barEl = document.getElementById("vectrola-global-player");
-      if (barEl && !import_obsidian.Platform.isMobile) {
+      if (barEl && !import_obsidian5.Platform.isMobile) {
         const pos2 = this.calculatePlayerPosition();
         barEl.setCssStyles({
           bottom: pos2.bottom,
@@ -1911,7 +2622,7 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       }
     };
     window.addEventListener("resize", updatePosition);
-    if (import_obsidian.Platform.isMobileApp) {
+    if (import_obsidian5.Platform.isMobileApp) {
       window.addEventListener("orientationchange", () => {
         setTimeout(updatePosition, 100);
       });
@@ -2491,669 +3202,5 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       }
     };
     requestAnimationFrame(updateFn);
-  }
-  // =========================================================================
-  // OAuth Authentication (Server-side token exchange)
-  // =========================================================================
-  async authenticate() {
-    const codeVerifier = generateCodeVerifier();
-    const codeChallenge = await generateCodeChallenge(codeVerifier);
-    const state = generateRandomState();
-    this.pendingAuthState = state;
-    try {
-      await (0, import_obsidian.requestUrl)({
-        url: `${OAUTH_SERVER}/auth/start`,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state, code_verifier: codeVerifier })
-      });
-    } catch (error) {
-      console.error("Failed to start auth session:", error);
-      new import_obsidian.Notice("Failed to connect to auth server. Please try again.");
-      this.pendingAuthState = null;
-      return;
-    }
-    let authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(GOOGLE_CLIENT_ID)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(SCOPES)}&access_type=offline&prompt=consent&code_challenge=${codeChallenge}&code_challenge_method=S256&state=${state}`;
-    if (this.settings.userEmail) {
-      authUrl += `&login_hint=${encodeURIComponent(this.settings.userEmail)}`;
-    }
-    try {
-      const { shell } = require("electron");
-      shell.openExternal(authUrl);
-    } catch (e) {
-      window.open(authUrl);
-    }
-    new import_obsidian.Notice("\u{1F510} Complete sign-in in your browser...");
-  }
-  // Handle OAuth callback from obsidian://vectrola-auth
-  async handleOAuthCallback(params) {
-    const { access_token, refresh_token, expires_in, state, error } = params;
-    if (state !== this.pendingAuthState) {
-      console.error("OAuth state mismatch:", { expected: this.pendingAuthState, received: state });
-      new import_obsidian.Notice("\u274C Authentication failed: Invalid session. Please try again.");
-      return;
-    }
-    this.pendingAuthState = null;
-    if (error || !access_token) {
-      new import_obsidian.Notice(`\u274C Authentication failed: ${error || "No token received"}`);
-      return;
-    }
-    this.settings.accessToken = access_token;
-    if (refresh_token) {
-      this.settings.refreshToken = refresh_token;
-    }
-    this.settings.tokenExpiry = Date.now() + parseInt(expires_in) * 1e3;
-    try {
-      const userInfo = await this.getUserInfo(access_token);
-      if (userInfo.email) {
-        this.settings.userEmail = userInfo.email;
-      }
-    } catch (e) {
-    }
-    await this.saveSettings();
-    new import_obsidian.Notice("\u{1F50D} Looking for Vectrola folders...");
-    try {
-      const wikiId = await this.resolveDrivePath("/Vectrola/wiki");
-      const audioId = await this.resolveDrivePath("/Vectrola/audio");
-      if (!wikiId) {
-        new import_obsidian.Notice("\u274C /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first to create it.", 8e3);
-        return;
-      }
-      this.settings.wikiFolderId = wikiId;
-      this.settings.audioFolderId = audioId || "";
-      await this.saveSettings();
-      this.setupSyncInterval();
-      this.events.trigger("auth-state-changed");
-      new import_obsidian.Notice("\u2705 Connected to Vectrola folders!");
-    } catch (e) {
-      console.error("Failed to resolve Vectrola folders:", e);
-      new import_obsidian.Notice("\u274C Failed to find Vectrola folders. Run 'vectrola wiki --sync' first.");
-    }
-  }
-  // Resolve a Drive path to folder ID (e.g., "/Vectrola/wiki" -> "abc123")
-  async resolveDrivePath(path) {
-    if (path === "/" || path === "")
-      return "root";
-    const parts = path.replace(/^\/+|\/+$/g, "").split("/");
-    let currentId = "root";
-    for (const part of parts) {
-      const query = `name='${part}' and '${currentId}' in parents and trashed=false`;
-      const response = await this.driveRequest(
-        `files?q=${encodeURIComponent(query)}&fields=files(id)`
-      );
-      const files = (response == null ? void 0 : response.files) || [];
-      if (files.length === 0)
-        return null;
-      currentId = files[0].id;
-    }
-    return currentId;
-  }
-  // Retry discovering Vectrola folders (called from settings tab)
-  async retryFolderDiscovery() {
-    if (!this.settings.accessToken) {
-      new import_obsidian.Notice("Please sign in first.");
-      return;
-    }
-    new import_obsidian.Notice("\u{1F50D} Looking for Vectrola folders...");
-    try {
-      const wikiId = await this.resolveDrivePath("/Vectrola/wiki");
-      const audioId = await this.resolveDrivePath("/Vectrola/audio");
-      if (!wikiId) {
-        new import_obsidian.Notice("\u274C /Vectrola/wiki folder not found.\n\nRun 'vectrola wiki --sync' in terminal first.", 8e3);
-        return;
-      }
-      this.settings.wikiFolderId = wikiId;
-      this.settings.audioFolderId = audioId || "";
-      await this.saveSettings();
-      this.setupSyncInterval();
-      this.events.trigger("auth-state-changed");
-      new import_obsidian.Notice("\u2705 Found Vectrola folders!");
-    } catch (e) {
-      console.error("Failed to resolve Vectrola folders:", e);
-      new import_obsidian.Notice("\u274C Failed to find Vectrola folders.");
-    }
-  }
-  async getUserInfo(accessToken) {
-    const response = await (0, import_obsidian.requestUrl)({
-      url: "https://www.googleapis.com/oauth2/v2/userinfo",
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
-    });
-    return response.json;
-  }
-  async refreshAccessToken() {
-    if (!this.settings.refreshToken) {
-      return false;
-    }
-    try {
-      const response = await (0, import_obsidian.requestUrl)({
-        url: `${OAUTH_SERVER}/auth/refresh`,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: this.settings.refreshToken })
-      });
-      const tokens = response.json;
-      if (tokens.error) {
-        throw new Error(tokens.error);
-      }
-      this.settings.accessToken = tokens.access_token;
-      this.settings.tokenExpiry = Date.now() + tokens.expires_in * 1e3;
-      await this.saveSettings();
-      return true;
-    } catch (error) {
-      console.error("Token refresh failed:", error);
-      return false;
-    }
-  }
-  async getValidAccessToken() {
-    if (Date.now() > this.settings.tokenExpiry - 6e4) {
-      const refreshed = await this.refreshAccessToken();
-      if (!refreshed) {
-        new import_obsidian.Notice("Session expired. Please sign in again.");
-        return null;
-      }
-    }
-    return this.settings.accessToken;
-  }
-  async signOut() {
-    this.settings.accessToken = "";
-    this.settings.refreshToken = "";
-    this.settings.tokenExpiry = 0;
-    this.settings.userEmail = "";
-    this.settings.wikiFolderId = "";
-    this.settings.audioFolderId = "";
-    await this.saveSettings();
-    if (this.syncInterval) {
-      window.clearInterval(this.syncInterval);
-      this.syncInterval = null;
-    }
-    new import_obsidian.Notice("Signed out from Google Drive.");
-  }
-  // =========================================================================
-  // Public API for DataviewJS (audio player)
-  // =========================================================================
-  /**
-   * Fetch a file from Google Drive by ID.
-   * Used by DataviewJS audio player to stream music files.
-   * Token is handled internally - never exposed to caller.
-   */
-  async fetchDriveFile(fileId) {
-    const token = await this.getValidAccessToken();
-    if (!token) {
-      throw new Error("Not authenticated with Google Drive");
-    }
-    const response = await (0, import_obsidian.requestUrl)({
-      url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-    return response.arrayBuffer;
-  }
-  // =========================================================================
-  // Google Drive API
-  // =========================================================================
-  async driveRequest(endpoint, method = "GET", body, contentType) {
-    const token = await this.getValidAccessToken();
-    if (!token) {
-      throw new Error("Not authenticated");
-    }
-    const headers = {
-      Authorization: `Bearer ${token}`
-    };
-    if (contentType) {
-      headers["Content-Type"] = contentType;
-    }
-    const response = await (0, import_obsidian.requestUrl)({
-      url: `https://www.googleapis.com/drive/v3/${endpoint}`,
-      method,
-      headers,
-      body
-    });
-    return response.json;
-  }
-  async findOrCreateFolder(path) {
-    const parts = path.split("/").filter((p) => p);
-    let parentId = "root";
-    for (const part of parts) {
-      const query = `name='${part}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-      const searchResult = await this.driveRequest(
-        `files?q=${encodeURIComponent(query)}&fields=files(id,name)`
-      );
-      if (searchResult.files && searchResult.files.length > 0) {
-        parentId = searchResult.files[0].id;
-      } else {
-        const metadata = {
-          name: part,
-          mimeType: "application/vnd.google-apps.folder",
-          parents: [parentId]
-        };
-        const created = await this.driveRequest(
-          "files?fields=id",
-          "POST",
-          JSON.stringify(metadata),
-          "application/json"
-        );
-        parentId = created.id;
-      }
-    }
-    return parentId;
-  }
-  async listDriveFiles(folderId) {
-    const files = [];
-    let pageToken;
-    do {
-      const query = `'${folderId}' in parents and trashed=false`;
-      let url = `files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,md5Checksum,parents)`;
-      if (pageToken) {
-        url += `&pageToken=${pageToken}`;
-      }
-      const result = await this.driveRequest(url);
-      if (result.files) {
-        files.push(...result.files);
-      }
-      pageToken = result.nextPageToken;
-    } while (pageToken);
-    return files;
-  }
-  async downloadFile(fileId) {
-    const token = await this.getValidAccessToken();
-    if (!token) {
-      throw new Error("Not authenticated");
-    }
-    const response = await (0, import_obsidian.requestUrl)({
-      url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-    return response.text;
-  }
-  async uploadFile(name, content, parentId, existingFileId) {
-    const token = await this.getValidAccessToken();
-    if (!token) {
-      throw new Error("Not authenticated");
-    }
-    const metadata = {
-      name,
-      ...existingFileId ? {} : { parents: [parentId] }
-    };
-    const boundary = "-------314159265358979323846";
-    const delimiter = "\r\n--" + boundary + "\r\n";
-    const closeDelim = "\r\n--" + boundary + "--";
-    const body = delimiter + "Content-Type: application/json; charset=UTF-8\r\n\r\n" + JSON.stringify(metadata) + delimiter + "Content-Type: text/markdown\r\n\r\n" + content + closeDelim;
-    const url = existingFileId ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id` : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`;
-    const response = await (0, import_obsidian.requestUrl)({
-      url,
-      method: existingFileId ? "PATCH" : "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": `multipart/related; boundary="${boundary}"`
-      },
-      body
-    });
-    return response.json.id;
-  }
-  showProgressNotice() {
-    if (this.currentNotice && document.body.contains(this.currentNotice.noticeEl)) {
-      return;
-    }
-    const noticeEl = document.createDocumentFragment();
-    const container = noticeEl.createDiv({ cls: "vectrola-sync-progress-container" });
-    const headerRow = container.createDiv({ cls: "vectrola-sync-progress-header" });
-    const label = headerRow.createDiv({ cls: "vectrola-sync-progress-label", text: "\u{1F504} Syncing..." });
-    const cancelBtn = headerRow.createEl("button", { cls: "vectrola-cancel-btn", text: "\u2715" });
-    const progressBar = container.createDiv({ cls: "vectrola-sync-progress-bar" });
-    const progressFill = progressBar.createDiv({ cls: "vectrola-sync-progress-fill" });
-    const progressText = container.createDiv({ cls: "vectrola-sync-progress-text", text: "0/0" });
-    this.currentNotice = new import_obsidian.Notice(noticeEl, 0);
-    this.noticeContent = { label, progressFill, progressText };
-    cancelBtn.onclick = (e) => {
-      var _a;
-      e.stopPropagation();
-      this.syncCancelled = true;
-      (_a = this.currentNotice) == null ? void 0 : _a.hide();
-      this.currentNotice = null;
-      this.noticeContent = null;
-      new import_obsidian.Notice("\u{1F6AB} Sync cancelled");
-    };
-    this.updateProgressDisplay();
-  }
-  updateProgressDisplay() {
-    if (!this.noticeContent)
-      return;
-    const { label, progressFill, progressText } = this.noticeContent;
-    const current = this.syncStats.processed;
-    const total = this.syncStats.total;
-    const pct = total > 0 ? Math.round(current / total * 100) : 0;
-    label.textContent = `\u2B07\uFE0F ${this.syncStats.downloaded} \u23ED\uFE0F ${this.syncStats.skipped}`;
-    progressFill.setCssStyles({ width: `${pct}%` });
-    progressText.textContent = `${current}/${total}`;
-  }
-  async syncFromDrive() {
-    var _a, _b;
-    if (!this.isAuthenticated()) {
-      new import_obsidian.Notice("Please sign in with Google Drive first.");
-      return;
-    }
-    if (!this.settings.wikiFolderId) {
-      new import_obsidian.Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
-      return;
-    }
-    if (this.isSyncing) {
-      this.showProgressNotice();
-      return;
-    }
-    this.isSyncing = true;
-    this.syncCancelled = false;
-    this.syncStats = { processed: 0, downloaded: 0, skipped: 0, total: 0 };
-    this.showProgressNotice();
-    if (this.noticeContent) {
-      this.noticeContent.label.textContent = "\u{1F504} Connecting...";
-    }
-    try {
-      const folderId = this.settings.wikiFolderId;
-      if (this.syncCancelled) {
-        this.isSyncing = false;
-        return;
-      }
-      if (this.noticeContent) {
-        this.noticeContent.label.textContent = "\u{1F504} Scanning folders...";
-      }
-      const allFiles = await this.collectDriveFiles(folderId, "");
-      this.syncStats.total = allFiles.length;
-      this.updateProgressDisplay();
-      if (this.syncCancelled) {
-        this.isSyncing = false;
-        return;
-      }
-      if (this.noticeContent) {
-        this.noticeContent.label.textContent = "\u{1F504} Downloading...";
-      }
-      await this.downloadFileBatch(allFiles, 10, () => this.updateProgressDisplay());
-      if (this.syncCancelled) {
-        this.isSyncing = false;
-        return;
-      }
-      this.settings.lastSyncTime = Date.now();
-      await this.saveSettings();
-      (_a = this.currentNotice) == null ? void 0 : _a.hide();
-      this.currentNotice = null;
-      this.noticeContent = null;
-      if (this.syncStats.skipped > 0) {
-        new import_obsidian.Notice(`\u2705 Sync complete! ${this.syncStats.downloaded} downloaded, ${this.syncStats.skipped} skipped`);
-      } else {
-        new import_obsidian.Notice(`\u2705 Sync complete! ${this.syncStats.downloaded} files downloaded`);
-      }
-    } catch (error) {
-      if (!this.syncCancelled) {
-        console.error("Sync failed:", error);
-        (_b = this.currentNotice) == null ? void 0 : _b.hide();
-        new import_obsidian.Notice(`\u274C Sync failed: ${error.message}`);
-      }
-      this.currentNotice = null;
-      this.noticeContent = null;
-    } finally {
-      this.isSyncing = false;
-    }
-  }
-  // Phase 1: Collect all files recursively (no downloads, just listing)
-  async collectDriveFiles(folderId, localPath) {
-    if (this.syncCancelled)
-      return [];
-    const result = [];
-    const driveFiles = await this.listDriveFiles(folderId);
-    for (const file of driveFiles) {
-      if (this.syncCancelled)
-        return result;
-      const filePath = localPath ? `${localPath}/${file.name}` : file.name;
-      if (file.mimeType === "application/vnd.google-apps.folder") {
-        const folder = this.app.vault.getAbstractFileByPath(filePath);
-        if (!folder) {
-          try {
-            await this.app.vault.createFolder(filePath);
-          } catch (e) {
-          }
-        }
-        const subFiles = await this.collectDriveFiles(file.id, filePath);
-        result.push(...subFiles);
-      } else if (file.name.endsWith(".md")) {
-        result.push({ file, localPath: filePath });
-      }
-    }
-    return result;
-  }
-  // Phase 2: Download files in parallel batches
-  async downloadFileBatch(files, concurrency = 10, onProgress) {
-    for (let i = 0; i < files.length; i += concurrency) {
-      if (this.syncCancelled)
-        return;
-      const batch = files.slice(i, i + concurrency);
-      await Promise.all(
-        batch.map(async ({ file, localPath }) => {
-          if (this.syncCancelled)
-            return;
-          try {
-            const cachedHash = this.settings.syncCache[localPath];
-            if (cachedHash && file.md5Checksum && cachedHash === file.md5Checksum) {
-              this.syncStats.processed++;
-              this.syncStats.skipped++;
-              onProgress == null ? void 0 : onProgress();
-              return;
-            }
-            const existingFile = this.app.vault.getAbstractFileByPath(localPath);
-            if (existingFile instanceof import_obsidian.TFile && file.md5Checksum) {
-              const localContent = await this.app.vault.read(existingFile);
-              const localHash = SparkMD5.hash(localContent);
-              if (localHash === file.md5Checksum) {
-                this.syncStats.processed++;
-                this.syncStats.skipped++;
-                this.settings.syncCache[localPath] = file.md5Checksum;
-                onProgress == null ? void 0 : onProgress();
-                return;
-              }
-            }
-            const content = await this.downloadFile(file.id);
-            if (existingFile instanceof import_obsidian.TFile) {
-              await this.app.vault.modify(existingFile, content);
-            } else {
-              try {
-                await this.app.vault.create(localPath, content);
-              } catch (e) {
-                const retryFile = this.app.vault.getAbstractFileByPath(localPath);
-                if (retryFile instanceof import_obsidian.TFile) {
-                  await this.app.vault.modify(retryFile, content);
-                }
-              }
-            }
-            if (file.md5Checksum) {
-              this.settings.syncCache[localPath] = file.md5Checksum;
-            }
-            this.syncStats.processed++;
-            this.syncStats.downloaded++;
-            onProgress == null ? void 0 : onProgress();
-          } catch (error) {
-            console.error(`Failed to download ${localPath}:`, error);
-            this.syncStats.processed++;
-            onProgress == null ? void 0 : onProgress();
-          }
-        })
-      );
-    }
-  }
-  async syncToDrive() {
-    var _a, _b, _c;
-    if (!this.isAuthenticated()) {
-      new import_obsidian.Notice("Please sign in with Google Drive first.");
-      return;
-    }
-    if (!this.settings.wikiFolderId) {
-      new import_obsidian.Notice("Wiki folder not found. Run 'vectrola wiki --sync' in terminal first.");
-      return;
-    }
-    new import_obsidian.Notice("Pushing to Google Drive...");
-    try {
-      const folderId = this.settings.wikiFolderId;
-      const files = this.app.vault.getMarkdownFiles();
-      let uploaded = 0;
-      for (const file of files) {
-        const content = await this.app.vault.read(file);
-        const parentPath = ((_a = file.parent) == null ? void 0 : _a.path) || "";
-        let parentFolderId = folderId;
-        if (parentPath) {
-          parentFolderId = await this.findOrCreateFolderInParent(folderId, parentPath);
-        }
-        const query = `name='${file.name}' and '${parentFolderId}' in parents and trashed=false`;
-        const existing = await this.driveRequest(
-          `files?q=${encodeURIComponent(query)}&fields=files(id)`
-        );
-        const existingId = (_c = (_b = existing.files) == null ? void 0 : _b[0]) == null ? void 0 : _c.id;
-        await this.uploadFile(file.name, content, parentFolderId, existingId);
-        uploaded++;
-      }
-      this.settings.lastSyncTime = Date.now();
-      await this.saveSettings();
-      new import_obsidian.Notice(`Pushed ${uploaded} files to Google Drive!`);
-    } catch (error) {
-      console.error("Push failed:", error);
-      new import_obsidian.Notice(`Push failed: ${error.message}`);
-    }
-  }
-  // Helper to create nested folders within a parent folder
-  async findOrCreateFolderInParent(parentFolderId, relativePath) {
-    const parts = relativePath.split("/").filter((p) => p);
-    let currentParentId = parentFolderId;
-    for (const part of parts) {
-      const query = `name='${part}' and '${currentParentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-      const searchResult = await this.driveRequest(
-        `files?q=${encodeURIComponent(query)}&fields=files(id,name)`
-      );
-      if (searchResult.files && searchResult.files.length > 0) {
-        currentParentId = searchResult.files[0].id;
-      } else {
-        const metadata = {
-          name: part,
-          mimeType: "application/vnd.google-apps.folder",
-          parents: [currentParentId]
-        };
-        const created = await this.driveRequest(
-          "files?fields=id",
-          "POST",
-          JSON.stringify(metadata),
-          "application/json"
-        );
-        currentParentId = created.id;
-      }
-    }
-    return currentParentId;
-  }
-};
-var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
-  constructor(app, plugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-    this.authStateHandler = () => this.display();
-    this.plugin.events.on("auth-state-changed", this.authStateHandler);
-  }
-  hide() {
-    this.plugin.events.off("auth-state-changed", this.authStateHandler);
-  }
-  display() {
-    const { containerEl } = this;
-    containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("Connection").setHeading();
-    if (this.plugin.isAuthenticated()) {
-      const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
-      const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
-      statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "\u2705" });
-      const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
-      statusText.createEl("div", { cls: "vectrola-status-title", text: "Connected to Google Drive" });
-      if (this.plugin.settings.userEmail) {
-        statusText.createEl("div", { cls: "vectrola-status-subtitle", text: this.plugin.settings.userEmail });
-      }
-      new import_obsidian.Setting(containerEl).setName("Sign out").setDesc("Disconnect from Google Drive").addButton(
-        (btn) => btn.setButtonText("Sign Out").setWarning().onClick(async () => {
-          await this.plugin.signOut();
-          this.display();
-        })
-      );
-    } else if (this.plugin.hasTokensOnly()) {
-      const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
-      const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
-      statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "\u26A0\uFE0F" });
-      const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
-      statusText.createEl("div", { cls: "vectrola-status-title", text: "Wiki folder not found" });
-      statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Run 'vectrola wiki --sync' in terminal first" });
-      new import_obsidian.Setting(containerEl).setName("Retry").setDesc("Try to find Vectrola folders again").addButton(
-        (btn) => btn.setButtonText("Retry").setCta().onClick(async () => {
-          await this.plugin.retryFolderDiscovery();
-          this.display();
-        })
-      );
-      new import_obsidian.Setting(containerEl).setName("Sign out").setDesc("Start over with a different account").addButton(
-        (btn) => btn.setButtonText("Sign Out").onClick(async () => {
-          await this.plugin.signOut();
-          this.display();
-        })
-      );
-    } else {
-      const statusBox = containerEl.createEl("div", { cls: "vectrola-status-box" });
-      const statusContainer = statusBox.createEl("div", { cls: "vectrola-status-container" });
-      statusContainer.createEl("span", { cls: "vectrola-status-icon", text: "\u{1F517}" });
-      const statusText = statusContainer.createEl("div", { cls: "vectrola-status-text" });
-      statusText.createEl("div", { cls: "vectrola-status-title", text: "Not connected" });
-      statusText.createEl("div", { cls: "vectrola-status-subtitle", text: "Sign in to sync your music wiki" });
-      new import_obsidian.Setting(containerEl).setName("Sign in with Google").setDesc("Connect to Google Drive to sync your wiki").addButton(
-        (btn) => btn.setButtonText("Sign in with Google").setCta().onClick(async () => {
-          await this.plugin.authenticate();
-          this.display();
-        })
-      );
-    }
-    new import_obsidian.Setting(containerEl).setName("Synchronization").setHeading();
-    if (this.plugin.settings.wikiFolderId) {
-      new import_obsidian.Setting(containerEl).setName("Wiki folder").setDesc("\u2713 Connected to /Vectrola/wiki").addButton(
-        (btn) => btn.setButtonText("Refresh").onClick(async () => {
-          await this.plugin.retryFolderDiscovery();
-          this.display();
-        })
-      );
-    }
-    new import_obsidian.Setting(containerEl).setName("Auto-sync on open").setDesc("Automatically pull from Drive when vault opens").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.autoSyncOnOpen).onChange(async (value) => {
-        this.plugin.settings.autoSyncOnOpen = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("Sync interval (minutes)").setDesc("How often to sync automatically (0 to disable)").addText(
-      (text) => text.setPlaceholder("5").setValue(String(this.plugin.settings.syncIntervalMinutes)).onChange(async (value) => {
-        const num = parseInt(value) || 0;
-        this.plugin.settings.syncIntervalMinutes = num;
-        await this.plugin.saveSettings();
-        this.plugin.setupSyncInterval();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("Manual Sync").setHeading();
-    new import_obsidian.Setting(containerEl).setName("Pull from Drive").setDesc("Download latest wiki from Google Drive").addButton(
-      (btn) => btn.setButtonText("Pull").onClick(async () => {
-        await this.plugin.syncFromDrive();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("Push to Drive").setDesc("Upload current vault to Google Drive").addButton(
-      (btn) => btn.setButtonText("Push").onClick(async () => {
-        await this.plugin.syncToDrive();
-      })
-    );
-    if (this.plugin.settings.lastSyncTime > 0) {
-      const lastSync = new Date(this.plugin.settings.lastSyncTime).toLocaleString();
-      containerEl.createEl("p", {
-        text: `Last synced: ${lastSync}`,
-        cls: "setting-item-description"
-      });
-    }
   }
 };
