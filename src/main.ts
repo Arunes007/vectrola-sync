@@ -1305,6 +1305,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 		playerBar = document.createElement("div");
 		playerBar.id = "vectrola-global-player";
 		playerBar.className = "vectrola-player-bar";
+		if (Platform.isMobile) {
+			playerBar.classList.add("is-mobile");
+		}
 
 		// Set dynamic position (bottom, left, width)
 		const pos = this.calculatePlayerPosition();
@@ -1327,6 +1330,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Click to seek
 		progressContainer.addEventListener("click", (e) => {
+			e.stopPropagation();
 			if (player.audio.duration) {
 				const rect = progressContainer.getBoundingClientRect();
 				const pos = (e.clientX - rect.left) / rect.width;
@@ -1338,12 +1342,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const content = document.createElement("div");
 		content.className = "vectrola-content";
 
-		// Controls (LEFT side - Apple Music style)
-		const controls = this.createControls();
-
 		// Thumbnail
 		const thumbnail = this.createThumbnail(player.currentTrack);
-		thumbnail.addEventListener("click", () => this.toggleOverlay());
 
 		// Track info
 		const trackInfo = document.createElement("div");
@@ -1353,16 +1353,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 		trackTitle.className = "vectrola-track-title";
 		trackTitle.id = "vectrola-track-title";
 		if (player.currentTrack) {
-			const link = document.createElement("a");
-			link.textContent = player.currentTrack.title;
-			link.href = "#";
-			link.addEventListener("click", (e) => {
-				e.preventDefault();
-				if (player.currentTrack?.link) {
-					this.app.workspace.openLinkText(player.currentTrack.link, "", false);
-				}
-			});
-			trackTitle.appendChild(link);
+			trackTitle.textContent = player.currentTrack.title;
 		} else {
 			trackTitle.textContent = "Select a track";
 		}
@@ -1380,33 +1371,75 @@ export default class VectrolaSyncPlugin extends Plugin {
 		artistContainer.appendChild(trackArtist);
 		trackInfo.append(trackTitle, artistContainer);
 
-		// Time display
-		const timeDisplay = document.createElement("div");
-		timeDisplay.className = "vectrola-time";
+		if (Platform.isMobile) {
+			// === MOBILE: Minimal bar with play + next only ===
+			const miniControls = document.createElement("div");
+			miniControls.className = "vectrola-mini-controls";
 
-		const currentTime = document.createElement("span");
-		currentTime.className = "vectrola-time-current";
-		currentTime.id = "vectrola-current-time";
-		currentTime.textContent = "0:00";
+			const playPauseBtn = this.createControlButton(player?.isPlaying ? "pause" : "play", "vectrola-playpause-btn");
+			playPauseBtn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				this.togglePlayPause();
+			});
 
-		const separator = document.createElement("span");
-		separator.className = "vectrola-time-separator";
-		separator.textContent = "/";
+			const nextBtn = this.createControlButton("next");
+			nextBtn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				this.nextTrack();
+			});
 
-		const totalTime = document.createElement("span");
-		totalTime.className = "vectrola-time-total";
-		totalTime.id = "vectrola-total-time";
-		totalTime.textContent = "0:00";
+			miniControls.append(playPauseBtn, nextBtn);
+			content.append(thumbnail, trackInfo, miniControls);
 
-		timeDisplay.append(currentTime, separator, totalTime);
+			// Tap on bar (except buttons) opens full player
+			content.addEventListener("click", () => this.showFullPlayer());
+		} else {
+			// === DESKTOP: Full controls ===
+			thumbnail.addEventListener("click", () => this.toggleOverlay());
 
-		// Volume (desktop only)
-		const volume = this.createVolumeControl();
+			// Make title clickable on desktop
+			if (player.currentTrack) {
+				trackTitle.replaceChildren();
+				const link = document.createElement("a");
+				link.textContent = player.currentTrack.title;
+				link.href = "#";
+				link.addEventListener("click", (e) => {
+					e.preventDefault();
+					if (player.currentTrack?.link) {
+						this.app.workspace.openLinkText(player.currentTrack.link, "", false);
+					}
+				});
+				trackTitle.appendChild(link);
+			}
 
-		// Assemble content: controls -> thumbnail -> info -> time -> volume
-		content.append(controls, thumbnail, trackInfo, timeDisplay);
-		if (!Platform.isMobile) {
-			content.appendChild(volume);
+			// Time display
+			const timeDisplay = document.createElement("div");
+			timeDisplay.className = "vectrola-time";
+
+			const currentTime = document.createElement("span");
+			currentTime.className = "vectrola-time-current";
+			currentTime.id = "vectrola-current-time";
+			currentTime.textContent = "0:00";
+
+			const separator = document.createElement("span");
+			separator.className = "vectrola-time-separator";
+			separator.textContent = "/";
+
+			const totalTime = document.createElement("span");
+			totalTime.className = "vectrola-time-total";
+			totalTime.id = "vectrola-total-time";
+			totalTime.textContent = "0:00";
+
+			timeDisplay.append(currentTime, separator, totalTime);
+
+			// Controls (LEFT side - Apple Music style)
+			const controls = this.createControls();
+
+			// Volume
+			const volume = this.createVolumeControl();
+
+			// Assemble content: controls -> thumbnail -> info -> time -> volume
+			content.append(controls, thumbnail, trackInfo, timeDisplay, volume);
 		}
 
 		// Assemble player bar
@@ -1420,105 +1453,63 @@ export default class VectrolaSyncPlugin extends Plugin {
 			trackTitle,
 			trackArtist,
 			thumbnail,
-			currentTime,
-			totalTime,
+			currentTime: document.getElementById("vectrola-current-time") as HTMLElement,
+			totalTime: document.getElementById("vectrola-total-time") as HTMLElement,
 		};
 
 		// =========================================
-		// Draggable player bar
+		// Draggable player bar (desktop only)
 		// =========================================
-		let isDragging = false;
-		let dragOffset = { x: 0, y: 0 };
-		const bar = playerBar; // Capture non-null reference
+		if (!Platform.isMobile) {
+			let isDragging = false;
+			let dragOffset = { x: 0, y: 0 };
+			const bar = playerBar;
 
-		// Non-interactive elements that allow dragging
-		const canDrag = (target: HTMLElement) => {
-			return !target.closest('button, input, .vectrola-progress-container, a');
-		};
+			const canDrag = (target: HTMLElement) => {
+				return !target.closest('button, input, .vectrola-progress-container, a');
+			};
 
-		bar.addEventListener('mousedown', (e) => {
-			if (!canDrag(e.target as HTMLElement)) return;
-
-			isDragging = true;
-			const rect = bar.getBoundingClientRect();
-			dragOffset.x = e.clientX - rect.left;
-			dragOffset.y = e.clientY - rect.top;
-			bar.classList.add('is-dragging');
-			e.preventDefault();
-		});
-
-		document.addEventListener('mousemove', (e) => {
-			if (!isDragging) return;
-
-			const x = e.clientX - dragOffset.x;
-			const y = e.clientY - dragOffset.y;
-
-			// Constrain to viewport
-			const maxX = window.innerWidth - bar.offsetWidth;
-			const maxY = window.innerHeight - bar.offsetHeight;
-
-			(bar as HTMLElement).setCssStyles({
-				left: `${Math.max(0, Math.min(x, maxX))}px`,
-				top: `${Math.max(0, Math.min(y, maxY))}px`,
-				bottom: 'auto'
+			bar.addEventListener('mousedown', (e) => {
+				if (!canDrag(e.target as HTMLElement)) return;
+				isDragging = true;
+				const rect = bar.getBoundingClientRect();
+				dragOffset.x = e.clientX - rect.left;
+				dragOffset.y = e.clientY - rect.top;
+				bar.classList.add('is-dragging');
+				e.preventDefault();
 			});
-		});
 
-		document.addEventListener('mouseup', () => {
-			if (isDragging) {
-				isDragging = false;
-				bar.classList.remove('is-dragging');
-			}
-		});
-
-		// Touch support for mobile
-		bar.addEventListener('touchstart', (e) => {
-			if (!canDrag(e.target as HTMLElement)) return;
-
-			isDragging = true;
-			const touch = e.touches[0];
-			const rect = bar.getBoundingClientRect();
-			dragOffset.x = touch.clientX - rect.left;
-			dragOffset.y = touch.clientY - rect.top;
-			bar.classList.add('is-dragging');
-		}, { passive: true });
-
-		document.addEventListener('touchmove', (e) => {
-			if (!isDragging) return;
-
-			const touch = e.touches[0];
-			const x = touch.clientX - dragOffset.x;
-			const y = touch.clientY - dragOffset.y;
-
-			const maxX = window.innerWidth - bar.offsetWidth;
-			const maxY = window.innerHeight - bar.offsetHeight;
-
-			(bar as HTMLElement).setCssStyles({
-				left: `${Math.max(0, Math.min(x, maxX))}px`,
-				top: `${Math.max(0, Math.min(y, maxY))}px`,
-				bottom: 'auto'
+			document.addEventListener('mousemove', (e) => {
+				if (!isDragging) return;
+				const x = e.clientX - dragOffset.x;
+				const y = e.clientY - dragOffset.y;
+				const maxX = window.innerWidth - bar.offsetWidth;
+				const maxY = window.innerHeight - bar.offsetHeight;
+				(bar as HTMLElement).setCssStyles({
+					left: `${Math.max(0, Math.min(x, maxX))}px`,
+					top: `${Math.max(0, Math.min(y, maxY))}px`,
+					bottom: 'auto'
+				});
 			});
-		}, { passive: true });
 
-		document.addEventListener('touchend', () => {
-			if (isDragging) {
-				isDragging = false;
-				bar.classList.remove('is-dragging');
-			}
-		});
-
-		// Double-click to reset position
-		bar.addEventListener('dblclick', (e) => {
-			if (!canDrag(e.target as HTMLElement)) return;
-
-			const pos = this.calculatePlayerPosition();
-			(bar as HTMLElement).setCssStyles({
-				bottom: pos.bottom,
-				left: pos.left,
-				top: '',
-				width: pos.width
+			document.addEventListener('mouseup', () => {
+				if (isDragging) {
+					isDragging = false;
+					bar.classList.remove('is-dragging');
+				}
 			});
-		});
+
+			bar.addEventListener('dblclick', (e) => {
+				if (!canDrag(e.target as HTMLElement)) return;
+				const pos = this.calculatePlayerPosition();
+				(bar as HTMLElement).setCssStyles({
+					bottom: pos.bottom,
+					left: pos.left,
+					top: '',
+					width: pos.width
+				});
+			});
+		}
 
 		// Update position on resize
 		const updatePosition = () => {
@@ -1547,6 +1538,348 @@ export default class VectrolaSyncPlugin extends Plugin {
 			thumbnail.classList.add("is-playing");
 			artistContainer.classList.add("is-playing");
 		}
+	}
+
+	// =========================================================================
+	// Full Player Modal (Mobile)
+	// =========================================================================
+
+	private showFullPlayer() {
+		const player = window.vectrolaPlayer;
+		if (!player) return;
+
+		// Remove existing if any
+		document.getElementById("vectrola-full-player-backdrop")?.remove();
+		document.getElementById("vectrola-full-player")?.remove();
+
+		// Backdrop
+		const backdrop = document.createElement("div");
+		backdrop.id = "vectrola-full-player-backdrop";
+		backdrop.className = "vectrola-full-player-backdrop";
+		backdrop.addEventListener("click", () => this.hideFullPlayer());
+
+		// Full player container
+		const fullPlayer = document.createElement("div");
+		fullPlayer.id = "vectrola-full-player";
+		fullPlayer.className = "vectrola-full-player";
+
+		// Drag handle
+		const dragHandle = document.createElement("div");
+		dragHandle.className = "vectrola-fp-drag-handle";
+		const handleBar = document.createElement("div");
+		handleBar.className = "vectrola-fp-handle-bar";
+		dragHandle.appendChild(handleBar);
+		dragHandle.addEventListener("click", () => this.hideFullPlayer());
+
+		// Header: artwork + title + star + more
+		const header = document.createElement("div");
+		header.className = "vectrola-fp-header";
+
+		const artwork = document.createElement("div");
+		artwork.className = "vectrola-fp-artwork";
+		if (player.currentTrack?.artwork_url) {
+			const img = document.createElement("img");
+			img.src = player.currentTrack.artwork_url;
+			artwork.appendChild(img);
+		} else {
+			artwork.classList.add(this.getMoodGradient(player.currentTrack?.mood));
+			setIconContent(artwork, 'music');
+		}
+
+		const headerInfo = document.createElement("div");
+		headerInfo.className = "vectrola-fp-header-info";
+
+		const titleEl = document.createElement("div");
+		titleEl.className = "vectrola-fp-title";
+		titleEl.textContent = player.currentTrack?.title || "No track";
+
+		const artistEl = document.createElement("div");
+		artistEl.className = "vectrola-fp-artist";
+		artistEl.textContent = player.currentTrack?.artist || "";
+
+		headerInfo.append(titleEl, artistEl);
+
+		const headerActions = document.createElement("div");
+		headerActions.className = "vectrola-fp-header-actions";
+
+		const starBtn = document.createElement("button");
+		starBtn.className = "vectrola-fp-btn";
+		setIconContent(starBtn, 'star');
+
+		const moreBtn = document.createElement("button");
+		moreBtn.className = "vectrola-fp-btn";
+		setIconContent(moreBtn, 'more');
+		moreBtn.addEventListener("click", () => {
+			if (player.currentTrack?.link) {
+				this.hideFullPlayer();
+				this.app.workspace.openLinkText(player.currentTrack.link, "", false);
+			}
+		});
+
+		headerActions.append(starBtn, moreBtn);
+		header.append(artwork, headerInfo, headerActions);
+
+		// Mode toggles: shuffle, repeat, infinity
+		const modeToggles = document.createElement("div");
+		modeToggles.className = "vectrola-fp-modes";
+
+		const shuffleBtn = document.createElement("button");
+		shuffleBtn.className = `vectrola-fp-mode-btn ${player.shuffleMode ? 'is-active' : ''}`;
+		setIconContent(shuffleBtn, 'shuffle');
+		shuffleBtn.addEventListener("click", () => {
+			this.toggleShuffle();
+			shuffleBtn.classList.toggle("is-active", player.shuffleMode);
+		});
+
+		const repeatBtn = document.createElement("button");
+		repeatBtn.className = `vectrola-fp-mode-btn ${player.repeatMode !== 'off' ? 'is-active' : ''}`;
+		setIconContent(repeatBtn, player.repeatMode === 'one' ? 'repeatOne' : 'repeat');
+		repeatBtn.addEventListener("click", () => {
+			this.toggleRepeat();
+			repeatBtn.classList.toggle("is-active", player.repeatMode !== 'off');
+			setIconContent(repeatBtn, player.repeatMode === 'one' ? 'repeatOne' : 'repeat');
+		});
+
+		const infinityBtn = document.createElement("button");
+		infinityBtn.className = "vectrola-fp-mode-btn";
+		setIconContent(infinityBtn, 'infinity');
+
+		modeToggles.append(shuffleBtn, repeatBtn, infinityBtn);
+
+		// Queue section
+		const queueSection = document.createElement("div");
+		queueSection.className = "vectrola-fp-queue-section";
+
+		const queueHeader = document.createElement("div");
+		queueHeader.className = "vectrola-fp-queue-header";
+
+		const queueTitle = document.createElement("div");
+		queueTitle.className = "vectrola-fp-queue-title";
+		queueTitle.textContent = "Continue Playing";
+
+		const queueSubtitle = document.createElement("div");
+		queueSubtitle.className = "vectrola-fp-queue-subtitle";
+		queueSubtitle.textContent = `From ${player.playlistSource || "Playlist"}`;
+
+		queueHeader.append(queueTitle, queueSubtitle);
+
+		const queueList = document.createElement("div");
+		queueList.className = "vectrola-fp-queue-list";
+
+		// Show next few tracks in queue
+		const startIdx = Math.max(0, player.currentIndex);
+		const queueTracks = player.playlist.slice(startIdx, startIdx + 5);
+		queueTracks.forEach((track, i) => {
+			const item = document.createElement("div");
+			item.className = "vectrola-fp-queue-item";
+			if (i === 0 && player.currentIndex >= 0) {
+				item.classList.add("is-current");
+			}
+
+			const itemArt = document.createElement("div");
+			itemArt.className = "vectrola-fp-queue-art";
+			if (track.artwork_url) {
+				const img = document.createElement("img");
+				img.src = track.artwork_url;
+				itemArt.appendChild(img);
+			} else {
+				itemArt.classList.add(this.getMoodGradient(track.mood));
+				setIconContent(itemArt, 'music');
+			}
+
+			const itemInfo = document.createElement("div");
+			itemInfo.className = "vectrola-fp-queue-info";
+			itemInfo.textContent = `${track.title} - ${track.artist}`;
+
+			const dragIcon = document.createElement("div");
+			dragIcon.className = "vectrola-fp-queue-drag";
+			setIconContent(dragIcon, 'queue');
+
+			item.append(itemArt, itemInfo, dragIcon);
+			item.addEventListener("click", () => {
+				this.playTrack(startIdx + i);
+				this.updateFullPlayerUI();
+			});
+			queueList.appendChild(item);
+		});
+
+		queueSection.append(queueHeader, queueList);
+
+		// Progress bar
+		const progressSection = document.createElement("div");
+		progressSection.className = "vectrola-fp-progress-section";
+
+		const progressBar = document.createElement("div");
+		progressBar.className = "vectrola-fp-progress-bar";
+		const progressFill = document.createElement("div");
+		progressFill.className = "vectrola-fp-progress-fill";
+		progressFill.id = "vectrola-fp-progress-fill";
+		if (player.audio.duration) {
+			progressFill.style.width = `${(player.audio.currentTime / player.audio.duration) * 100}%`;
+		}
+		progressBar.appendChild(progressFill);
+
+		progressBar.addEventListener("click", (e) => {
+			if (player.audio.duration) {
+				const rect = progressBar.getBoundingClientRect();
+				const pos = (e.clientX - rect.left) / rect.width;
+				player.audio.currentTime = pos * player.audio.duration;
+			}
+		});
+
+		const timeRow = document.createElement("div");
+		timeRow.className = "vectrola-fp-time-row";
+
+		const currentTimeEl = document.createElement("span");
+		currentTimeEl.id = "vectrola-fp-current-time";
+		currentTimeEl.textContent = this.formatTime(player.audio.currentTime);
+
+		const remainingTimeEl = document.createElement("span");
+		remainingTimeEl.id = "vectrola-fp-remaining-time";
+		const remaining = player.audio.duration ? player.audio.duration - player.audio.currentTime : 0;
+		remainingTimeEl.textContent = `-${this.formatTime(remaining)}`;
+
+		timeRow.append(currentTimeEl, remainingTimeEl);
+		progressSection.append(progressBar, timeRow);
+
+		// Main controls: prev, play, next
+		const mainControls = document.createElement("div");
+		mainControls.className = "vectrola-fp-main-controls";
+
+		const prevBtn = this.createControlButton("previous");
+		prevBtn.className = "vectrola-fp-control-btn";
+		prevBtn.addEventListener("click", () => this.prevTrack());
+
+		const playPauseBtn = this.createControlButton(player.isPlaying ? "pause" : "play", "vectrola-fp-playpause-btn");
+		playPauseBtn.className = "vectrola-fp-control-btn vectrola-fp-playpause";
+		playPauseBtn.addEventListener("click", () => {
+			this.togglePlayPause();
+			setIconContent(playPauseBtn, player.isPlaying ? "pause" : "play");
+		});
+
+		const nextBtn = this.createControlButton("next");
+		nextBtn.className = "vectrola-fp-control-btn";
+		nextBtn.addEventListener("click", () => this.nextTrack());
+
+		mainControls.append(prevBtn, playPauseBtn, nextBtn);
+
+		// Volume slider
+		const volumeSection = document.createElement("div");
+		volumeSection.className = "vectrola-fp-volume-section";
+
+		const volLow = document.createElement("span");
+		volLow.className = "vectrola-fp-vol-icon";
+		setIconContent(volLow, 'volumeMute');
+
+		const volSlider = document.createElement("input");
+		volSlider.type = "range";
+		volSlider.min = "0";
+		volSlider.max = "100";
+		volSlider.value = String(Math.round((player.volume ?? 1) * 100));
+		volSlider.className = "vectrola-fp-volume-slider";
+		volSlider.addEventListener("input", (e) => {
+			const value = parseInt((e.target as HTMLInputElement).value);
+			player.audio.volume = value / 100;
+			player.volume = value / 100;
+		});
+
+		const volHigh = document.createElement("span");
+		volHigh.className = "vectrola-fp-vol-icon";
+		setIconContent(volHigh, 'volume');
+
+		volumeSection.append(volLow, volSlider, volHigh);
+
+		// Assemble full player
+		fullPlayer.append(
+			dragHandle,
+			header,
+			modeToggles,
+			queueSection,
+			progressSection,
+			mainControls,
+			volumeSection
+		);
+
+		document.body.append(backdrop, fullPlayer);
+
+		// Animate in
+		requestAnimationFrame(() => {
+			backdrop.classList.add("is-visible");
+			fullPlayer.classList.add("is-visible");
+		});
+
+		// Update progress in full player
+		this.setupFullPlayerUpdates();
+	}
+
+	private hideFullPlayer() {
+		const backdrop = document.getElementById("vectrola-full-player-backdrop");
+		const fullPlayer = document.getElementById("vectrola-full-player");
+
+		backdrop?.classList.remove("is-visible");
+		fullPlayer?.classList.remove("is-visible");
+
+		setTimeout(() => {
+			backdrop?.remove();
+			fullPlayer?.remove();
+		}, 300);
+	}
+
+	private updateFullPlayerUI() {
+		const player = window.vectrolaPlayer;
+		if (!player) return;
+
+		const titleEl = document.querySelector(".vectrola-fp-title");
+		const artistEl = document.querySelector(".vectrola-fp-artist");
+		const artwork = document.querySelector(".vectrola-fp-artwork");
+
+		if (titleEl) titleEl.textContent = player.currentTrack?.title || "No track";
+		if (artistEl) artistEl.textContent = player.currentTrack?.artist || "";
+
+		if (artwork) {
+			artwork.replaceChildren();
+			artwork.className = "vectrola-fp-artwork";
+			if (player.currentTrack?.artwork_url) {
+				const img = document.createElement("img");
+				img.src = player.currentTrack.artwork_url;
+				artwork.appendChild(img);
+			} else {
+				artwork.classList.add(this.getMoodGradient(player.currentTrack?.mood));
+				setIconContent(artwork as HTMLElement, 'music');
+			}
+		}
+	}
+
+	private setupFullPlayerUpdates() {
+		const player = window.vectrolaPlayer;
+		if (!player) return;
+
+		const updateFn = () => {
+			const progressFill = document.getElementById("vectrola-fp-progress-fill");
+			const currentTimeEl = document.getElementById("vectrola-fp-current-time");
+			const remainingTimeEl = document.getElementById("vectrola-fp-remaining-time");
+			const playPauseBtn = document.getElementById("vectrola-fp-playpause-btn");
+
+			if (progressFill && player.audio.duration) {
+				progressFill.style.width = `${(player.audio.currentTime / player.audio.duration) * 100}%`;
+			}
+			if (currentTimeEl) {
+				currentTimeEl.textContent = this.formatTime(player.audio.currentTime);
+			}
+			if (remainingTimeEl && player.audio.duration) {
+				const remaining = player.audio.duration - player.audio.currentTime;
+				remainingTimeEl.textContent = `-${this.formatTime(remaining)}`;
+			}
+			if (playPauseBtn) {
+				setIconContent(playPauseBtn, player.isPlaying ? "pause" : "play");
+			}
+
+			// Continue updating if full player is visible
+			if (document.getElementById("vectrola-full-player")) {
+				requestAnimationFrame(updateFn);
+			}
+		};
+		requestAnimationFrame(updateFn);
 	}
 
 	// =========================================================================
