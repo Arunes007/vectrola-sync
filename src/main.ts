@@ -602,204 +602,194 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (!player || index < 0 || index >= player.playlist.length) return;
 
 		const track = player.playlist[index];
-		const os = require("os");
-		const hostname = os.hostname();
+		const sources = track.sources || { local: {}, cloud: {} };
+		let audioLoaded = false;
 
-		try {
-			// Clean up previous blob URL if any
-			if (player.audio.src && player.audio.src.startsWith("blob:")) {
-				URL.revokeObjectURL(player.audio.src);
-			}
+		// Clean up previous blob URL if any
+		if (player.audio.src && player.audio.src.startsWith("blob:")) {
+			URL.revokeObjectURL(player.audio.src);
+		}
 
-			// Resolve best playback source from sources schema
-			const sources = track.sources || { local: {}, cloud: {} };
-			let audioLoaded = false;
+		// === DESKTOP: Try local files ===
+		if (!Platform.isMobile && sources.local) {
+			try {
+				const os = require("os");
+				const fs = require("fs");
+				const hostname = os.hostname();
 
-			// Priority 1: Local file on current device
-			if (sources.local?.[hostname]?.file_path) {
-				const localPath = sources.local[hostname].file_path;
-				try {
-					const fs = require("fs");
-					if (fs.existsSync(localPath)) {
-						const buffer = fs.readFileSync(localPath);
-						const blob = new Blob([buffer], { type: "audio/mpeg" });
-						player.audio.src = URL.createObjectURL(blob);
-						audioLoaded = true;
-						console.log("Playing from local (current device):", localPath);
-					}
-				} catch (e) {
-					console.warn("Local file not accessible:", e);
+				// Try current device first
+				const currentDevice = sources.local[hostname];
+				if (currentDevice?.file_path && fs.existsSync(currentDevice.file_path)) {
+					const buffer = fs.readFileSync(currentDevice.file_path);
+					const blob = new Blob([buffer], { type: "audio/mpeg" });
+					player.audio.src = URL.createObjectURL(blob);
+					audioLoaded = true;
+					console.log("Playing from local:", currentDevice.file_path);
 				}
-			}
 
-			// Priority 2: Local file on any device (might work if path is accessible)
-			if (!audioLoaded && sources.local) {
-				for (const [device, deviceData] of Object.entries(sources.local)) {
-					if (device === hostname) continue; // Already tried
-					const path = (deviceData as any)?.file_path;
-					if (!path) continue;
-					try {
-						const fs = require("fs");
-						if (fs.existsSync(path)) {
-							const buffer = fs.readFileSync(path);
+				// Fall back to other devices
+				if (!audioLoaded) {
+					for (const [device, deviceData] of Object.entries(sources.local)) {
+						if (device === hostname) continue;
+						const filePath = (deviceData as any)?.file_path;
+						if (filePath && fs.existsSync(filePath)) {
+							const buffer = fs.readFileSync(filePath);
 							const blob = new Blob([buffer], { type: "audio/mpeg" });
 							player.audio.src = URL.createObjectURL(blob);
 							audioLoaded = true;
-							console.log(`Playing from local (${device}):`, path);
+							console.log("Playing from local (other device):", filePath);
 							break;
 						}
-					} catch (e) {
-						// Path from another device, expected to fail
 					}
 				}
+			} catch (e) {
+				console.warn("Local file access failed:", e);
 			}
+		}
 
-			// Priority 3: Google Drive
-			if (!audioLoaded && sources.cloud?.gdrive?.file_id) {
-				const gdriveId = sources.cloud.gdrive.file_id;
-				console.log("Trying GDrive playback:", gdriveId);
-				try {
-					if (this.isAuthenticated()) {
-						const arrayBuffer = await this.fetchDriveFile(gdriveId);
-						const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+		// === MOBILE: Try vault path ===
+		if (!audioLoaded && Platform.isMobile) {
+			const gdrivePath = sources.cloud?.gdrive?.path;
+			if (gdrivePath) {
+				const vaultPath = `audio/${gdrivePath}`;
+				const file = this.app.vault.getAbstractFileByPath(vaultPath);
+				if (file instanceof TFile) {
+					try {
+						const buffer = await this.app.vault.readBinary(file);
+						const blob = new Blob([buffer], { type: "audio/mpeg" });
 						player.audio.src = URL.createObjectURL(blob);
 						audioLoaded = true;
-						console.log("Playing from GDrive (plugin auth):", gdriveId);
-					} else {
-						// Fallback: Try CLI token
-						const fs = require("fs");
-						const path = require("path");
-						const tokenPath = path.join(os.homedir(), ".config", "vectrola", "gdrive_token.json");
-						if (fs.existsSync(tokenPath)) {
-							const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
-							const accessToken = tokenData.token;
-
-							const response = await fetch(
-								`https://www.googleapis.com/drive/v3/files/${gdriveId}?alt=media`,
-								{ headers: { Authorization: `Bearer ${accessToken}` } }
-							);
-
-							if (response.ok) {
-								const arrayBuffer = await response.arrayBuffer();
-								const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-								player.audio.src = URL.createObjectURL(blob);
-								audioLoaded = true;
-								console.log("Playing from GDrive (CLI token):", gdriveId);
-							}
-						}
+						console.log("Playing from vault:", vaultPath);
+					} catch (e) {
+						console.warn("Vault read failed:", e);
 					}
-				} catch (gdriveError) {
-					console.warn("GDrive playback failed:", gdriveError);
 				}
 			}
+		}
 
-			// No source found - show helpful message based on what sources exist
-			if (!audioLoaded) {
-				const hasLocalSources = Object.keys(sources.local || {}).length > 0;
-				const hasCloudSources = Object.keys(sources.cloud || {}).length > 0;
+		// === CLOUD: Google Drive (both platforms) ===
+		if (!audioLoaded && sources.cloud?.gdrive?.file_id && this.isAuthenticated()) {
+			const gdriveId = sources.cloud.gdrive.file_id;
+			try {
+				const arrayBuffer = await this.fetchDriveFile(gdriveId);
+				const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+				player.audio.src = URL.createObjectURL(blob);
+				audioLoaded = true;
+				console.log("Playing from GDrive:", gdriveId);
+			} catch (e) {
+				console.warn("GDrive playback failed:", e);
+			}
+		}
 
-				let message = `⚠️ Cannot play "${track.title}"\n`;
+		// No source found - show helpful message based on what sources exist
+		if (!audioLoaded) {
+			const hasLocalSources = Object.keys(sources.local || {}).length > 0;
+			const hasCloudSources = Object.keys(sources.cloud || {}).length > 0;
 
-				if (hasLocalSources && !hasCloudSources) {
-					// Has local paths from other devices but not this one
-					const devices = Object.keys(sources.local).join(", ");
-					message += `File exists on: ${devices}\n`;
-					message += `Re-ingest on this device: vectrola ingest <path>`;
-				} else if (hasCloudSources && !this.isAuthenticated()) {
-					// Has cloud sources but not authenticated
-					message += `Available on Google Drive.\n`;
-					message += `Sign in to Vectrola Sync to play.`;
-				} else if (!hasLocalSources && !hasCloudSources) {
-					// No sources at all - need to ingest
-					message += `No file path found.\n`;
-					message += `Run: vectrola ingest <path-to-file>`;
-				} else {
-					// Has sources but all failed
-					message += `File not accessible.\n`;
-					message += `Re-ingest: vectrola ingest <path>`;
-				}
+			let message = `⚠️ Cannot play "${track.title}"\n`;
 
-				new Notice(message, 5000);
-				return;
+			if (hasLocalSources && !hasCloudSources) {
+				// Has local paths from other devices but not this one
+				const devices = Object.keys(sources.local).join(", ");
+				message += `File exists on: ${devices}\n`;
+				message += `Re-ingest on this device: vectrola ingest <path>`;
+			} else if (hasCloudSources && !this.isAuthenticated()) {
+				// Has cloud sources but not authenticated
+				message += `Available on Google Drive.\n`;
+				message += `Sign in to Vectrola Sync to play.`;
+			} else if (!hasLocalSources && !hasCloudSources) {
+				// No sources at all - need to ingest
+				message += `No file path found.\n`;
+				message += `Run: vectrola ingest <path-to-file>`;
+			} else {
+				// Has sources but all failed
+				message += `File not accessible.\n`;
+				message += `Re-ingest: vectrola ingest <path>`;
 			}
 
-			player.currentIndex = index;
-			player.currentTrack = track;
+			new Notice(message, 5000);
+			return;
+		}
 
-			// Update Media Session metadata for lock screen controls
-			if ('mediaSession' in navigator) {
-				navigator.mediaSession.metadata = new MediaMetadata({
-					title: track.title,
-					artist: track.artist,
-					album: track.album || '',
-					artwork: track.artwork_url ? [
-						{ src: track.artwork_url, sizes: '512x512', type: 'image/jpeg' }
-					] : []
-				});
-				navigator.mediaSession.playbackState = 'playing';
-			}
+		player.currentIndex = index;
+		player.currentTrack = track;
 
-			// Persist last played track to localStorage
-			localStorage.setItem('vectrola-last-track', JSON.stringify({
-				track: track,
-				index: index,
-				playlist: player.playlist,
-				playlistSource: player.playlistSource,
-				position: 0
-			}));
+		// Update Media Session metadata for lock screen controls
+		if ('mediaSession' in navigator) {
+			navigator.mediaSession.metadata = new MediaMetadata({
+				title: track.title,
+				artist: track.artist,
+				album: track.album || '',
+				artwork: track.artwork_url ? [
+					{ src: track.artwork_url, sizes: '512x512', type: 'image/jpeg' }
+				] : []
+			});
+			navigator.mediaSession.playbackState = 'playing';
+		}
 
+		// Persist last played track to localStorage
+		localStorage.setItem('vectrola-last-track', JSON.stringify({
+			track: track,
+			index: index,
+			playlist: player.playlist,
+			playlistSource: player.playlistSource,
+			position: 0
+		}));
+
+		try {
 			await player.audio.play();
 			player.isPlaying = true;
-
-			// Update UI
-			const titleEl = document.getElementById("vectrola-track-title");
-			const artistEl = document.getElementById("vectrola-track-artist");
-			const ppBtn = document.getElementById("vectrola-playpause-btn");
-			const thumbnail = document.getElementById("vectrola-thumbnail");
-			const artistContainer = document.querySelector(".vectrola-track-artist-container");
-
-			if (titleEl) {
-				titleEl.replaceChildren();
-				const link = document.createElement("a");
-				link.textContent = track.title;
-				link.href = "#";
-				link.addEventListener("click", (e) => {
-					e.preventDefault();
-					if (track.link) {
-						this.app.workspace.openLinkText(track.link, "", false);
-					}
-				});
-				titleEl.appendChild(link);
-			}
-			if (artistEl) artistEl.textContent = track.artist;
-			if (ppBtn) setIconContent(ppBtn, 'pause');
-
-			// Update thumbnail
-			this.updateThumbnail(track);
-
-			// Add playing animations
-			thumbnail?.classList.add("is-playing");
-			artistContainer?.classList.add("is-playing");
-
-			// Update overlay if visible
-			if (player.overlayVisible) {
-				this.updateOverlayContent();
-			}
-
-			// Update all registered highlight updaters
-			window.vectrolaHighlightUpdaters?.forEach(fn => fn());
-
-			// Add audio-playing class to current track row for equalizer animation
-			document.querySelectorAll(".vectrola-track-row.is-playing").forEach(row => {
-				row.classList.add("audio-playing");
-			});
-
-			if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
-				player.shuffleHistory.push(index);
-			}
 		} catch (e) {
 			console.error("Playback failed:", e);
 			new Notice(`❌ Playback failed: ${(e as Error).message}`);
+			return;
+		}
+
+		// Update UI
+		const titleEl = document.getElementById("vectrola-track-title");
+		const artistEl = document.getElementById("vectrola-track-artist");
+		const ppBtn = document.getElementById("vectrola-playpause-btn");
+		const thumbnail = document.getElementById("vectrola-thumbnail");
+		const artistContainer = document.querySelector(".vectrola-track-artist-container");
+
+		if (titleEl) {
+			titleEl.replaceChildren();
+			const link = document.createElement("a");
+			link.textContent = track.title;
+			link.href = "#";
+			link.addEventListener("click", (e) => {
+				e.preventDefault();
+				if (track.link) {
+					this.app.workspace.openLinkText(track.link, "", false);
+				}
+			});
+			titleEl.appendChild(link);
+		}
+		if (artistEl) artistEl.textContent = track.artist;
+		if (ppBtn) setIconContent(ppBtn, 'pause');
+
+		// Update thumbnail
+		this.updateThumbnail(track);
+
+		// Add playing animations
+		thumbnail?.classList.add("is-playing");
+		artistContainer?.classList.add("is-playing");
+
+		// Update overlay if visible
+		if (player.overlayVisible) {
+			this.updateOverlayContent();
+		}
+
+		// Update all registered highlight updaters
+		window.vectrolaHighlightUpdaters?.forEach(fn => fn());
+
+		// Add audio-playing class to current track row for equalizer animation
+		document.querySelectorAll(".vectrola-track-row.is-playing").forEach(row => {
+			row.classList.add("audio-playing");
+		});
+
+		if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
+			player.shuffleHistory.push(index);
 		}
 	}
 
@@ -2073,19 +2063,21 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			if (this.syncCancelled) { this.isSyncing = false; return; }
 
-			// First pass: count total files
+			// Phase 1: Collect all files (fast - just API listing)
 			if (this.noticeContent) {
-				this.noticeContent.label.textContent = "🔄 Counting files...";
+				this.noticeContent.label.textContent = "🔄 Scanning folders...";
 			}
-			this.syncStats.total = await this.countDriveFiles(folderId);
+			const allFiles = await this.collectDriveFiles(folderId, "");
+			this.syncStats.total = allFiles.length;
 			this.updateProgressDisplay();
 
 			if (this.syncCancelled) { this.isSyncing = false; return; }
 
-			// Second pass: sync files with progress
-			await this.syncFolderFromDrive(folderId, "", () => {
-				this.updateProgressDisplay();
-			});
+			// Phase 2: Download files in parallel batches of 10
+			if (this.noticeContent) {
+				this.noticeContent.label.textContent = "🔄 Downloading...";
+			}
+			await this.downloadFileBatch(allFiles, 10, () => this.updateProgressDisplay());
 
 			if (this.syncCancelled) { this.isSyncing = false; return; }
 
@@ -2114,32 +2106,18 @@ export default class VectrolaSyncPlugin extends Plugin {
 		}
 	}
 
-	async countDriveFiles(folderId: string): Promise<number> {
-		if (this.syncCancelled) return 0;
+	// Phase 1: Collect all files recursively (no downloads, just listing)
+	async collectDriveFiles(
+		folderId: string,
+		localPath: string
+	): Promise<Array<{ file: DriveFile; localPath: string }>> {
+		if (this.syncCancelled) return [];
 
-		const driveFiles = await this.listDriveFiles(folderId);
-		let count = 0;
-
-		for (const file of driveFiles) {
-			if (this.syncCancelled) return count;
-
-			if (file.mimeType === "application/vnd.google-apps.folder") {
-				count += await this.countDriveFiles(file.id);
-			} else if (file.name.endsWith(".md")) {
-				count++;
-			}
-		}
-
-		return count;
-	}
-
-	async syncFolderFromDrive(folderId: string, localPath: string, onProgress?: (current: number) => void) {
-		if (this.syncCancelled) return;
-
+		const result: Array<{ file: DriveFile; localPath: string }> = [];
 		const driveFiles = await this.listDriveFiles(folderId);
 
 		for (const file of driveFiles) {
-			if (this.syncCancelled) return;
+			if (this.syncCancelled) return result;
 
 			const filePath = localPath ? `${localPath}/${file.name}` : file.name;
 
@@ -2153,62 +2131,92 @@ export default class VectrolaSyncPlugin extends Plugin {
 						// Folder may already exist, ignore
 					}
 				}
-				await this.syncFolderFromDrive(file.id, filePath, onProgress);
+				// Recurse into subfolder
+				const subFiles = await this.collectDriveFiles(file.id, filePath);
+				result.push(...subFiles);
 			} else if (file.name.endsWith(".md")) {
-				// First check cache (fast path)
-				const cachedHash = this.settings.syncCache[filePath];
-				if (cachedHash && file.md5Checksum && cachedHash === file.md5Checksum) {
-					// File unchanged per cache, skip download
-					this.syncStats.processed++;
-					this.syncStats.skipped++;
-					if (onProgress) onProgress(this.syncStats.processed);
-					continue;
-				}
-
-				// Cache miss - check if local file exists and compare MD5 directly
-				const existingFile = this.app.vault.getAbstractFileByPath(filePath);
-				if (existingFile instanceof TFile && file.md5Checksum) {
-					const localContent = await this.app.vault.read(existingFile);
-					const localHash = SparkMD5.hash(localContent);
-
-					if (localHash === file.md5Checksum) {
-						// Local file matches Drive, skip download and update cache
-						this.syncStats.processed++;
-						this.syncStats.skipped++;
-						this.settings.syncCache[filePath] = file.md5Checksum;
-						if (onProgress) onProgress(this.syncStats.processed);
-						continue;
-					}
-				}
-
-				// File missing or different - download it
-				this.syncStats.processed++;
-				this.syncStats.downloaded++;
-				if (onProgress) onProgress(this.syncStats.processed);
-
-				// Download and save markdown file
-				const content = await this.downloadFile(file.id);
-
-				if (existingFile instanceof TFile) {
-					await this.app.vault.modify(existingFile, content);
-				} else {
-					// Create new file
-					try {
-						await this.app.vault.create(filePath, content);
-					} catch {
-						// File may already exist, try to modify instead
-						const retryFile = this.app.vault.getAbstractFileByPath(filePath);
-						if (retryFile instanceof TFile) {
-							await this.app.vault.modify(retryFile, content);
-						}
-					}
-				}
-
-				// Update cache with new hash
-				if (file.md5Checksum) {
-					this.settings.syncCache[filePath] = file.md5Checksum;
-				}
+				result.push({ file, localPath: filePath });
 			}
+		}
+
+		return result;
+	}
+
+	// Phase 2: Download files in parallel batches
+	async downloadFileBatch(
+		files: Array<{ file: DriveFile; localPath: string }>,
+		concurrency: number = 10,
+		onProgress?: () => void
+	) {
+		// Process in batches for controlled concurrency
+		for (let i = 0; i < files.length; i += concurrency) {
+			if (this.syncCancelled) return;
+
+			const batch = files.slice(i, i + concurrency);
+			await Promise.all(
+				batch.map(async ({ file, localPath }) => {
+					if (this.syncCancelled) return;
+
+					try {
+						// First check cache (fast path)
+						const cachedHash = this.settings.syncCache[localPath];
+						if (cachedHash && file.md5Checksum && cachedHash === file.md5Checksum) {
+							// File unchanged per cache, skip download
+							this.syncStats.processed++;
+							this.syncStats.skipped++;
+							onProgress?.();
+							return;
+						}
+
+						// Cache miss - check if local file exists and compare MD5 directly
+						const existingFile = this.app.vault.getAbstractFileByPath(localPath);
+						if (existingFile instanceof TFile && file.md5Checksum) {
+							const localContent = await this.app.vault.read(existingFile);
+							const localHash = SparkMD5.hash(localContent);
+
+							if (localHash === file.md5Checksum) {
+								// Local file matches Drive, skip download and update cache
+								this.syncStats.processed++;
+								this.syncStats.skipped++;
+								this.settings.syncCache[localPath] = file.md5Checksum;
+								onProgress?.();
+								return;
+							}
+						}
+
+						// File missing or different - download it
+						const content = await this.downloadFile(file.id);
+
+						if (existingFile instanceof TFile) {
+							await this.app.vault.modify(existingFile, content);
+						} else {
+							// Create new file
+							try {
+								await this.app.vault.create(localPath, content);
+							} catch {
+								// File may already exist, try to modify instead
+								const retryFile = this.app.vault.getAbstractFileByPath(localPath);
+								if (retryFile instanceof TFile) {
+									await this.app.vault.modify(retryFile, content);
+								}
+							}
+						}
+
+						// Update cache with new hash
+						if (file.md5Checksum) {
+							this.settings.syncCache[localPath] = file.md5Checksum;
+						}
+
+						this.syncStats.processed++;
+						this.syncStats.downloaded++;
+						onProgress?.();
+					} catch (error) {
+						console.error(`Failed to download ${localPath}:`, error);
+						this.syncStats.processed++;
+						onProgress?.();
+					}
+				})
+			);
 		}
 	}
 

@@ -937,170 +937,161 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
     if (!player || index < 0 || index >= player.playlist.length)
       return;
     const track = player.playlist[index];
-    const os = require("os");
-    const hostname = os.hostname();
-    try {
-      if (player.audio.src && player.audio.src.startsWith("blob:")) {
-        URL.revokeObjectURL(player.audio.src);
-      }
-      const sources = track.sources || { local: {}, cloud: {} };
-      let audioLoaded = false;
-      if ((_b = (_a = sources.local) == null ? void 0 : _a[hostname]) == null ? void 0 : _b.file_path) {
-        const localPath = sources.local[hostname].file_path;
-        try {
-          const fs = require("fs");
-          if (fs.existsSync(localPath)) {
-            const buffer = fs.readFileSync(localPath);
-            const blob = new Blob([buffer], { type: "audio/mpeg" });
-            player.audio.src = URL.createObjectURL(blob);
-            audioLoaded = true;
-            console.log("Playing from local (current device):", localPath);
-          }
-        } catch (e) {
-          console.warn("Local file not accessible:", e);
+    const sources = track.sources || { local: {}, cloud: {} };
+    let audioLoaded = false;
+    if (player.audio.src && player.audio.src.startsWith("blob:")) {
+      URL.revokeObjectURL(player.audio.src);
+    }
+    if (!import_obsidian.Platform.isMobile && sources.local) {
+      try {
+        const os = require("os");
+        const fs = require("fs");
+        const hostname = os.hostname();
+        const currentDevice = sources.local[hostname];
+        if ((currentDevice == null ? void 0 : currentDevice.file_path) && fs.existsSync(currentDevice.file_path)) {
+          const buffer = fs.readFileSync(currentDevice.file_path);
+          const blob = new Blob([buffer], { type: "audio/mpeg" });
+          player.audio.src = URL.createObjectURL(blob);
+          audioLoaded = true;
+          console.log("Playing from local:", currentDevice.file_path);
         }
-      }
-      if (!audioLoaded && sources.local) {
-        for (const [device, deviceData] of Object.entries(sources.local)) {
-          if (device === hostname)
-            continue;
-          const path = deviceData == null ? void 0 : deviceData.file_path;
-          if (!path)
-            continue;
-          try {
-            const fs = require("fs");
-            if (fs.existsSync(path)) {
-              const buffer = fs.readFileSync(path);
+        if (!audioLoaded) {
+          for (const [device, deviceData] of Object.entries(sources.local)) {
+            if (device === hostname)
+              continue;
+            const filePath = deviceData == null ? void 0 : deviceData.file_path;
+            if (filePath && fs.existsSync(filePath)) {
+              const buffer = fs.readFileSync(filePath);
               const blob = new Blob([buffer], { type: "audio/mpeg" });
               player.audio.src = URL.createObjectURL(blob);
               audioLoaded = true;
-              console.log(`Playing from local (${device}):`, path);
+              console.log("Playing from local (other device):", filePath);
               break;
             }
-          } catch (e) {
           }
         }
+      } catch (e) {
+        console.warn("Local file access failed:", e);
       }
-      if (!audioLoaded && ((_d = (_c = sources.cloud) == null ? void 0 : _c.gdrive) == null ? void 0 : _d.file_id)) {
-        const gdriveId = sources.cloud.gdrive.file_id;
-        console.log("Trying GDrive playback:", gdriveId);
-        try {
-          if (this.isAuthenticated()) {
-            const arrayBuffer = await this.fetchDriveFile(gdriveId);
-            const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+    }
+    if (!audioLoaded && import_obsidian.Platform.isMobile) {
+      const gdrivePath = (_b = (_a = sources.cloud) == null ? void 0 : _a.gdrive) == null ? void 0 : _b.path;
+      if (gdrivePath) {
+        const vaultPath = `audio/${gdrivePath}`;
+        const file = this.app.vault.getAbstractFileByPath(vaultPath);
+        if (file instanceof import_obsidian.TFile) {
+          try {
+            const buffer = await this.app.vault.readBinary(file);
+            const blob = new Blob([buffer], { type: "audio/mpeg" });
             player.audio.src = URL.createObjectURL(blob);
             audioLoaded = true;
-            console.log("Playing from GDrive (plugin auth):", gdriveId);
-          } else {
-            const fs = require("fs");
-            const path = require("path");
-            const tokenPath = path.join(os.homedir(), ".config", "vectrola", "gdrive_token.json");
-            if (fs.existsSync(tokenPath)) {
-              const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
-              const accessToken = tokenData.token;
-              const response = await fetch(
-                `https://www.googleapis.com/drive/v3/files/${gdriveId}?alt=media`,
-                { headers: { Authorization: `Bearer ${accessToken}` } }
-              );
-              if (response.ok) {
-                const arrayBuffer = await response.arrayBuffer();
-                const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-                player.audio.src = URL.createObjectURL(blob);
-                audioLoaded = true;
-                console.log("Playing from GDrive (CLI token):", gdriveId);
-              }
-            }
+            console.log("Playing from vault:", vaultPath);
+          } catch (e) {
+            console.warn("Vault read failed:", e);
           }
-        } catch (gdriveError) {
-          console.warn("GDrive playback failed:", gdriveError);
         }
       }
-      if (!audioLoaded) {
-        const hasLocalSources = Object.keys(sources.local || {}).length > 0;
-        const hasCloudSources = Object.keys(sources.cloud || {}).length > 0;
-        let message = `\u26A0\uFE0F Cannot play "${track.title}"
-`;
-        if (hasLocalSources && !hasCloudSources) {
-          const devices = Object.keys(sources.local).join(", ");
-          message += `File exists on: ${devices}
-`;
-          message += `Re-ingest on this device: vectrola ingest <path>`;
-        } else if (hasCloudSources && !this.isAuthenticated()) {
-          message += `Available on Google Drive.
-`;
-          message += `Sign in to Vectrola Sync to play.`;
-        } else if (!hasLocalSources && !hasCloudSources) {
-          message += `No file path found.
-`;
-          message += `Run: vectrola ingest <path-to-file>`;
-        } else {
-          message += `File not accessible.
-`;
-          message += `Re-ingest: vectrola ingest <path>`;
-        }
-        new import_obsidian.Notice(message, 5e3);
-        return;
+    }
+    if (!audioLoaded && ((_d = (_c = sources.cloud) == null ? void 0 : _c.gdrive) == null ? void 0 : _d.file_id) && this.isAuthenticated()) {
+      const gdriveId = sources.cloud.gdrive.file_id;
+      try {
+        const arrayBuffer = await this.fetchDriveFile(gdriveId);
+        const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+        player.audio.src = URL.createObjectURL(blob);
+        audioLoaded = true;
+        console.log("Playing from GDrive:", gdriveId);
+      } catch (e) {
+        console.warn("GDrive playback failed:", e);
       }
-      player.currentIndex = index;
-      player.currentTrack = track;
-      if ("mediaSession" in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: track.title,
-          artist: track.artist,
-          album: track.album || "",
-          artwork: track.artwork_url ? [
-            { src: track.artwork_url, sizes: "512x512", type: "image/jpeg" }
-          ] : []
-        });
-        navigator.mediaSession.playbackState = "playing";
+    }
+    if (!audioLoaded) {
+      const hasLocalSources = Object.keys(sources.local || {}).length > 0;
+      const hasCloudSources = Object.keys(sources.cloud || {}).length > 0;
+      let message = `\u26A0\uFE0F Cannot play "${track.title}"
+`;
+      if (hasLocalSources && !hasCloudSources) {
+        const devices = Object.keys(sources.local).join(", ");
+        message += `File exists on: ${devices}
+`;
+        message += `Re-ingest on this device: vectrola ingest <path>`;
+      } else if (hasCloudSources && !this.isAuthenticated()) {
+        message += `Available on Google Drive.
+`;
+        message += `Sign in to Vectrola Sync to play.`;
+      } else if (!hasLocalSources && !hasCloudSources) {
+        message += `No file path found.
+`;
+        message += `Run: vectrola ingest <path-to-file>`;
+      } else {
+        message += `File not accessible.
+`;
+        message += `Re-ingest: vectrola ingest <path>`;
       }
-      localStorage.setItem("vectrola-last-track", JSON.stringify({
-        track,
-        index,
-        playlist: player.playlist,
-        playlistSource: player.playlistSource,
-        position: 0
-      }));
+      new import_obsidian.Notice(message, 5e3);
+      return;
+    }
+    player.currentIndex = index;
+    player.currentTrack = track;
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: track.title,
+        artist: track.artist,
+        album: track.album || "",
+        artwork: track.artwork_url ? [
+          { src: track.artwork_url, sizes: "512x512", type: "image/jpeg" }
+        ] : []
+      });
+      navigator.mediaSession.playbackState = "playing";
+    }
+    localStorage.setItem("vectrola-last-track", JSON.stringify({
+      track,
+      index,
+      playlist: player.playlist,
+      playlistSource: player.playlistSource,
+      position: 0
+    }));
+    try {
       await player.audio.play();
       player.isPlaying = true;
-      const titleEl = document.getElementById("vectrola-track-title");
-      const artistEl = document.getElementById("vectrola-track-artist");
-      const ppBtn = document.getElementById("vectrola-playpause-btn");
-      const thumbnail = document.getElementById("vectrola-thumbnail");
-      const artistContainer = document.querySelector(".vectrola-track-artist-container");
-      if (titleEl) {
-        titleEl.replaceChildren();
-        const link = document.createElement("a");
-        link.textContent = track.title;
-        link.href = "#";
-        link.addEventListener("click", (e) => {
-          e.preventDefault();
-          if (track.link) {
-            this.app.workspace.openLinkText(track.link, "", false);
-          }
-        });
-        titleEl.appendChild(link);
-      }
-      if (artistEl)
-        artistEl.textContent = track.artist;
-      if (ppBtn)
-        setIconContent(ppBtn, "pause");
-      this.updateThumbnail(track);
-      thumbnail == null ? void 0 : thumbnail.classList.add("is-playing");
-      artistContainer == null ? void 0 : artistContainer.classList.add("is-playing");
-      if (player.overlayVisible) {
-        this.updateOverlayContent();
-      }
-      (_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.forEach((fn) => fn());
-      document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
-        row.classList.add("audio-playing");
-      });
-      if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
-        player.shuffleHistory.push(index);
-      }
     } catch (e) {
       console.error("Playback failed:", e);
       new import_obsidian.Notice(`\u274C Playback failed: ${e.message}`);
+      return;
+    }
+    const titleEl = document.getElementById("vectrola-track-title");
+    const artistEl = document.getElementById("vectrola-track-artist");
+    const ppBtn = document.getElementById("vectrola-playpause-btn");
+    const thumbnail = document.getElementById("vectrola-thumbnail");
+    const artistContainer = document.querySelector(".vectrola-track-artist-container");
+    if (titleEl) {
+      titleEl.replaceChildren();
+      const link = document.createElement("a");
+      link.textContent = track.title;
+      link.href = "#";
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (track.link) {
+          this.app.workspace.openLinkText(track.link, "", false);
+        }
+      });
+      titleEl.appendChild(link);
+    }
+    if (artistEl)
+      artistEl.textContent = track.artist;
+    if (ppBtn)
+      setIconContent(ppBtn, "pause");
+    this.updateThumbnail(track);
+    thumbnail == null ? void 0 : thumbnail.classList.add("is-playing");
+    artistContainer == null ? void 0 : artistContainer.classList.add("is-playing");
+    if (player.overlayVisible) {
+      this.updateOverlayContent();
+    }
+    (_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.forEach((fn) => fn());
+    document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
+      row.classList.add("audio-playing");
+    });
+    if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
+      player.shuffleHistory.push(index);
     }
   }
   togglePlayPause() {
@@ -2087,17 +2078,19 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
         return;
       }
       if (this.noticeContent) {
-        this.noticeContent.label.textContent = "\u{1F504} Counting files...";
+        this.noticeContent.label.textContent = "\u{1F504} Scanning folders...";
       }
-      this.syncStats.total = await this.countDriveFiles(folderId);
+      const allFiles = await this.collectDriveFiles(folderId, "");
+      this.syncStats.total = allFiles.length;
       this.updateProgressDisplay();
       if (this.syncCancelled) {
         this.isSyncing = false;
         return;
       }
-      await this.syncFolderFromDrive(folderId, "", () => {
-        this.updateProgressDisplay();
-      });
+      if (this.noticeContent) {
+        this.noticeContent.label.textContent = "\u{1F504} Downloading...";
+      }
+      await this.downloadFileBatch(allFiles, 10, () => this.updateProgressDisplay());
       if (this.syncCancelled) {
         this.isSyncing = false;
         return;
@@ -2124,29 +2117,15 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
       this.isSyncing = false;
     }
   }
-  async countDriveFiles(folderId) {
+  // Phase 1: Collect all files recursively (no downloads, just listing)
+  async collectDriveFiles(folderId, localPath) {
     if (this.syncCancelled)
-      return 0;
-    const driveFiles = await this.listDriveFiles(folderId);
-    let count = 0;
-    for (const file of driveFiles) {
-      if (this.syncCancelled)
-        return count;
-      if (file.mimeType === "application/vnd.google-apps.folder") {
-        count += await this.countDriveFiles(file.id);
-      } else if (file.name.endsWith(".md")) {
-        count++;
-      }
-    }
-    return count;
-  }
-  async syncFolderFromDrive(folderId, localPath, onProgress) {
-    if (this.syncCancelled)
-      return;
+      return [];
+    const result = [];
     const driveFiles = await this.listDriveFiles(folderId);
     for (const file of driveFiles) {
       if (this.syncCancelled)
-        return;
+        return result;
       const filePath = localPath ? `${localPath}/${file.name}` : file.name;
       if (file.mimeType === "application/vnd.google-apps.folder") {
         const folder = this.app.vault.getAbstractFileByPath(filePath);
@@ -2156,50 +2135,70 @@ var VectrolaSyncPlugin = class extends import_obsidian.Plugin {
           } catch (e) {
           }
         }
-        await this.syncFolderFromDrive(file.id, filePath, onProgress);
+        const subFiles = await this.collectDriveFiles(file.id, filePath);
+        result.push(...subFiles);
       } else if (file.name.endsWith(".md")) {
-        const cachedHash = this.settings.syncCache[filePath];
-        if (cachedHash && file.md5Checksum && cachedHash === file.md5Checksum) {
-          this.syncStats.processed++;
-          this.syncStats.skipped++;
-          if (onProgress)
-            onProgress(this.syncStats.processed);
-          continue;
-        }
-        const existingFile = this.app.vault.getAbstractFileByPath(filePath);
-        if (existingFile instanceof import_obsidian.TFile && file.md5Checksum) {
-          const localContent = await this.app.vault.read(existingFile);
-          const localHash = SparkMD5.hash(localContent);
-          if (localHash === file.md5Checksum) {
-            this.syncStats.processed++;
-            this.syncStats.skipped++;
-            this.settings.syncCache[filePath] = file.md5Checksum;
-            if (onProgress)
-              onProgress(this.syncStats.processed);
-            continue;
-          }
-        }
-        this.syncStats.processed++;
-        this.syncStats.downloaded++;
-        if (onProgress)
-          onProgress(this.syncStats.processed);
-        const content = await this.downloadFile(file.id);
-        if (existingFile instanceof import_obsidian.TFile) {
-          await this.app.vault.modify(existingFile, content);
-        } else {
-          try {
-            await this.app.vault.create(filePath, content);
-          } catch (e) {
-            const retryFile = this.app.vault.getAbstractFileByPath(filePath);
-            if (retryFile instanceof import_obsidian.TFile) {
-              await this.app.vault.modify(retryFile, content);
-            }
-          }
-        }
-        if (file.md5Checksum) {
-          this.settings.syncCache[filePath] = file.md5Checksum;
-        }
+        result.push({ file, localPath: filePath });
       }
+    }
+    return result;
+  }
+  // Phase 2: Download files in parallel batches
+  async downloadFileBatch(files, concurrency = 10, onProgress) {
+    for (let i = 0; i < files.length; i += concurrency) {
+      if (this.syncCancelled)
+        return;
+      const batch = files.slice(i, i + concurrency);
+      await Promise.all(
+        batch.map(async ({ file, localPath }) => {
+          if (this.syncCancelled)
+            return;
+          try {
+            const cachedHash = this.settings.syncCache[localPath];
+            if (cachedHash && file.md5Checksum && cachedHash === file.md5Checksum) {
+              this.syncStats.processed++;
+              this.syncStats.skipped++;
+              onProgress == null ? void 0 : onProgress();
+              return;
+            }
+            const existingFile = this.app.vault.getAbstractFileByPath(localPath);
+            if (existingFile instanceof import_obsidian.TFile && file.md5Checksum) {
+              const localContent = await this.app.vault.read(existingFile);
+              const localHash = SparkMD5.hash(localContent);
+              if (localHash === file.md5Checksum) {
+                this.syncStats.processed++;
+                this.syncStats.skipped++;
+                this.settings.syncCache[localPath] = file.md5Checksum;
+                onProgress == null ? void 0 : onProgress();
+                return;
+              }
+            }
+            const content = await this.downloadFile(file.id);
+            if (existingFile instanceof import_obsidian.TFile) {
+              await this.app.vault.modify(existingFile, content);
+            } else {
+              try {
+                await this.app.vault.create(localPath, content);
+              } catch (e) {
+                const retryFile = this.app.vault.getAbstractFileByPath(localPath);
+                if (retryFile instanceof import_obsidian.TFile) {
+                  await this.app.vault.modify(retryFile, content);
+                }
+              }
+            }
+            if (file.md5Checksum) {
+              this.settings.syncCache[localPath] = file.md5Checksum;
+            }
+            this.syncStats.processed++;
+            this.syncStats.downloaded++;
+            onProgress == null ? void 0 : onProgress();
+          } catch (error) {
+            console.error(`Failed to download ${localPath}:`, error);
+            this.syncStats.processed++;
+            onProgress == null ? void 0 : onProgress();
+          }
+        })
+      );
     }
   }
   async syncToDrive() {
