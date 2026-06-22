@@ -31,7 +31,6 @@ interface VectrolaSyncSettings {
 	refreshToken: string;
 	tokenExpiry: number;
 	userEmail: string;
-	userId: string; // Vectrola user ID (e.g., "arunes007")
 	driveFolderPath: string;
 	autoSyncOnOpen: boolean;
 	syncIntervalMinutes: number;
@@ -98,7 +97,6 @@ const DEFAULT_SETTINGS: VectrolaSyncSettings = {
 	refreshToken: "",
 	tokenExpiry: 0,
 	userEmail: "",
-	userId: "", // Vectrola user ID
 	driveFolderPath: "/Vectrola/wiki",
 	autoSyncOnOpen: true,
 	syncIntervalMinutes: 1440,
@@ -2419,20 +2417,6 @@ class VectrolaSyncSettingTab extends PluginSettingTab {
 
 		// Sync Options
 		new Setting(containerEl).setName("Synchronization").setHeading();
-
-		// Vectrola User ID
-		new Setting(containerEl)
-			.setName("Vectrola User ID")
-			.setDesc("Your Vectrola username (from 'vectrola whoami')")
-			.addText((text) =>
-				text
-					.setPlaceholder("e.g., arunes007")
-					.setValue(this.plugin.settings.userId)
-					.onChange(async (value) => {
-						this.plugin.settings.userId = value;
-						await this.plugin.saveSettings();
-					})
-			);
 
 		// Show wiki folder status
 		if (this.plugin.settings.wikiFolderId) {

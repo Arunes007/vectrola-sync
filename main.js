@@ -551,8 +551,6 @@ var DEFAULT_SETTINGS = {
   refreshToken: "",
   tokenExpiry: 0,
   userEmail: "",
-  userId: "",
-  // Vectrola user ID
   driveFolderPath: "/Vectrola/wiki",
   autoSyncOnOpen: true,
   syncIntervalMinutes: 1440,
@@ -2331,12 +2329,6 @@ var VectrolaSyncSettingTab = class extends import_obsidian.PluginSettingTab {
       );
     }
     new import_obsidian.Setting(containerEl).setName("Synchronization").setHeading();
-    new import_obsidian.Setting(containerEl).setName("Vectrola User ID").setDesc("Your Vectrola username (from 'vectrola whoami')").addText(
-      (text) => text.setPlaceholder("e.g., arunes007").setValue(this.plugin.settings.userId).onChange(async (value) => {
-        this.plugin.settings.userId = value;
-        await this.plugin.saveSettings();
-      })
-    );
     if (this.plugin.settings.wikiFolderId) {
       new import_obsidian.Setting(containerEl).setName("Wiki folder").setDesc("\u2713 Connected to /Vectrola/wiki").addButton(
         (btn) => btn.setButtonText("Refresh").onClick(async () => {
