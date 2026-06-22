@@ -566,7 +566,7 @@ function setIconContent(element, iconName) {
   }
 }
 
-// src/main.ts
+// src/types.ts
 var GOOGLE_CLIENT_ID = "212647824656-9h9gchm0msibletsog338miabe9qtbe1.apps.googleusercontent.com";
 var OAUTH_SERVER = "https://vectrola-oauth.up.railway.app";
 var REDIRECT_URI = `${OAUTH_SERVER}/callback`;
@@ -584,6 +584,8 @@ var DEFAULT_SETTINGS = {
   wikiFolderId: "",
   audioFolderId: ""
 };
+
+// src/main.ts
 function generateCodeVerifier() {
   const array = new Uint8Array(32);
   crypto.getRandomValues(array);
