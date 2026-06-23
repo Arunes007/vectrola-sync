@@ -2231,19 +2231,20 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			item.append(itemArt, itemInfo, dragIcon);
 
-			// Click behavior: current = toggle play/pause, other = play track
+			// Click to play a different track
 			item.addEventListener("click", () => {
-				if (isCurrent) {
-					// Toggle play/pause for current track
-					this.togglePlayPause();
-				} else {
-					// Play the selected track (don't auto-close modal)
-					this.playTrack(trackIdx);
-					// Update the queue UI to reflect new current track
-					this.updateFullPlayerUI();
-					// Rebuild queue to show new current
-					this.rebuildQueueList(queueList);
-				}
+				// Optimistic UI update - set track info immediately
+				player.currentIndex = trackIdx;
+				player.currentTrack = track;
+
+				// Update full player header immediately (before audio loads)
+				this.updateFullPlayerUI();
+
+				// Rebuild queue to show new state
+				this.rebuildQueueList(queueList);
+
+				// Then load and play audio in background
+				this.playTrack(trackIdx);
 			});
 
 			return item;
@@ -2688,10 +2689,18 @@ export default class VectrolaSyncPlugin extends Plugin {
 			item.append(itemArt, itemInfo, dragIcon);
 
 			item.addEventListener("click", () => {
-				// All items are non-current (current is in header), so just play
-				this.playTrack(trackIdx);
+				// Optimistic UI update - set track info immediately
+				player.currentIndex = trackIdx;
+				player.currentTrack = track;
+
+				// Update full player header immediately
 				this.updateFullPlayerUI();
+
+				// Rebuild queue to show new state
 				this.rebuildQueueList(queueList);
+
+				// Then load and play audio in background
+				this.playTrack(trackIdx);
 			});
 
 			return item;

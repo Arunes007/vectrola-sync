@@ -3138,13 +3138,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       }
       item.append(itemArt, itemInfo, dragIcon);
       item.addEventListener("click", () => {
-        if (isCurrent) {
-          this.togglePlayPause();
-        } else {
-          this.playTrack(trackIdx);
-          this.updateFullPlayerUI();
-          this.rebuildQueueList(queueList);
-        }
+        player.currentIndex = trackIdx;
+        player.currentTrack = track;
+        this.updateFullPlayerUI();
+        this.rebuildQueueList(queueList);
+        this.playTrack(trackIdx);
       });
       return item;
     };
@@ -3516,9 +3514,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       }
       item.append(itemArt, itemInfo, dragIcon);
       item.addEventListener("click", () => {
-        this.playTrack(trackIdx);
+        player.currentIndex = trackIdx;
+        player.currentTrack = track;
         this.updateFullPlayerUI();
         this.rebuildQueueList(queueList);
+        this.playTrack(trackIdx);
       });
       return item;
     };
