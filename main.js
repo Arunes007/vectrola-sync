@@ -1538,9 +1538,19 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       const trackListEl = container.createEl("div");
       trackListEl.className = "vectrola-track-list";
       const updateLocalHighlight = () => {
+        var _a2, _b2;
+        console.log("[Vectrola] updateLocalHighlight called", {
+          currentTrack: (_a2 = player.currentTrack) == null ? void 0 : _a2.title,
+          currentTrackId: (_b2 = player.currentTrack) == null ? void 0 : _b2.track_id,
+          currentIndex: player.currentIndex,
+          playlistSource: player.playlistSource,
+          pageTitle,
+          rowCount: trackListEl.querySelectorAll(".vectrola-track-row").length
+        });
         trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
           const track = playlist[i];
           const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
+          console.log(`[Vectrola] Row ${i}: track_id=${track.track_id}, isCurrentTrack=${isCurrentTrack}`);
           row.classList.toggle("is-playing", !!isCurrentTrack);
           row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
         });

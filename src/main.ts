@@ -344,9 +344,18 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			// Update track highlight for this page's list
 			const updateLocalHighlight = () => {
+				console.log('[Vectrola] updateLocalHighlight called', {
+					currentTrack: player.currentTrack?.title,
+					currentTrackId: player.currentTrack?.track_id,
+					currentIndex: player.currentIndex,
+					playlistSource: player.playlistSource,
+					pageTitle: pageTitle,
+					rowCount: trackListEl.querySelectorAll(".vectrola-track-row").length
+				});
 				trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
 					const track = playlist[i];
 					const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
+					console.log(`[Vectrola] Row ${i}: track_id=${track.track_id}, isCurrentTrack=${isCurrentTrack}`);
 					row.classList.toggle("is-playing", !!isCurrentTrack);
 					// Also toggle audio-playing based on whether audio is actually playing
 					row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
