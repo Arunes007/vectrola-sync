@@ -3038,9 +3038,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         alignItems: "center",
         gap: "12px",
         padding: "10px 0",
-        cursor: "pointer",
-        opacity: isPrevious ? "0.5" : "1"
-        // Muted style for previous tracks
+        cursor: "pointer"
       });
       const itemArt = document.createElement("div");
       itemArt.setCssStyles({
@@ -3415,8 +3413,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         alignItems: "center",
         gap: "12px",
         padding: "10px 0",
-        cursor: "pointer",
-        opacity: isPrevious ? "0.5" : "1"
+        cursor: "pointer"
       });
       const itemArt = document.createElement("div");
       itemArt.setCssStyles({
