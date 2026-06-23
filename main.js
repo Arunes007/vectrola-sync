@@ -1851,6 +1851,9 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     if (player.overlayVisible) {
       this.updateOverlayContent();
     }
+    document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
+      row.classList.remove("is-playing", "audio-playing");
+    });
     (_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.forEach((fn) => fn());
     document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
       row.classList.add("audio-playing");
