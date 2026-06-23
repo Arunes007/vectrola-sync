@@ -43,6 +43,25 @@ export default class VectrolaSyncPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
+		// CRITICAL: Clear any lingering animation states from previous session
+		// This prevents pulse animation from continuing after Obsidian restart
+		document.querySelectorAll('.is-playing').forEach(el => {
+			el.classList.remove('is-playing');
+		});
+		// Also clear any existing player bar from previous session
+		document.getElementById('vectrola-global-player')?.remove();
+		document.getElementById('vectrola-full-player')?.remove();
+		document.getElementById('vectrola-full-player-backdrop')?.remove();
+
+		// Reset player state if it exists from previous session
+		if (window.vectrolaPlayer) {
+			if (window.vectrolaPlayer.audio) {
+				window.vectrolaPlayer.audio.pause();
+				window.vectrolaPlayer.audio.currentTime = 0;
+			}
+			window.vectrolaPlayer.isPlaying = false;
+		}
+
 		// Initialize modules
 		// Drive client needs a token getter - we'll set it up after auth
 		this.drive = createDriveClient(() => this.auth.getValidAccessToken());
@@ -845,6 +864,16 @@ export default class VectrolaSyncPlugin extends Plugin {
 		} else if (player.currentIndex >= 0) {
 			player.shuffleHistory = [player.currentIndex];
 		}
+
+		// Update full player UI if open
+		if (document.getElementById("vectrola-full-player")) {
+			this.updateFullPlayerUI();
+			// Rebuild queue list to reflect current state
+			const queueList = document.querySelector('.vectrola-queue-list');
+			if (queueList) {
+				this.rebuildQueueList(queueList as HTMLElement);
+			}
+		}
 	}
 
 	private toggleRepeat() {
@@ -1275,9 +1304,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const pos = this.calculatePlayerPosition();
 
 		if (Platform.isMobile) {
-			// === MOBILE PLAYER BAR - Compact pill design (iOS-style) ===
+			// === MOBILE PLAYER BAR - Ultra-compact pill design (iOS-style) ===
 			// Use safe area inset for notched devices (iPhone X+)
-			const safeBottom = 'max(20px, env(safe-area-inset-bottom, 20px))';
+			const safeBottom = 'max(16px, env(safe-area-inset-bottom, 16px))';
 
 			(playerBar as HTMLElement).setCssStyles({
 				position: 'fixed',
@@ -1286,9 +1315,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 				right: '12px',
 				width: 'auto',
 				background: 'rgba(28, 28, 30, 0.95)',
-				borderRadius: '28px',  // True pill shape (half of ~56px height)
+				borderRadius: '24px',  // True pill shape (half of ~48px height)
 				boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
-				zIndex: '1000',
+				zIndex: '100',  // Lowered so Obsidian side menu overlaps
 				overflow: 'hidden',
 				transition: 'transform 0.2s ease, box-shadow 0.2s ease'  // Smooth transitions
 			});
@@ -1309,10 +1338,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 				bottom: '0',
 				left: '0',
 				right: '0',
-				height: '3px',
+				height: '2px',  // Thinner progress bar
 				background: 'rgba(255, 255, 255, 0.1)',
 				cursor: 'pointer',
-				borderRadius: '0 0 28px 28px'  // Match bottom corners of pill
+				borderRadius: '0 0 24px 24px'  // Match bottom corners of pill
 			});
 
 			const progressFill = document.createElement("div");
@@ -1321,7 +1350,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				height: '100%',
 				background: '#E53935',
 				width: '0%',
-				borderRadius: '0 0 0 28px',
+				borderRadius: '0 0 0 24px',
 				transition: 'width 0.1s linear'
 			});
 			progressContainer.appendChild(progressFill);
@@ -1336,26 +1365,26 @@ export default class VectrolaSyncPlugin extends Plugin {
 				}
 			});
 
-			// Content row - compact layout
+			// Content row - ultra-compact layout
 			const content = document.createElement("div");
 			(content as HTMLElement).setCssStyles({
 				display: 'flex',
 				flexDirection: 'row',
 				alignItems: 'center',
-				gap: '10px',
-				padding: '8px 14px',
-				paddingBottom: '11px'  // Account for progress bar at bottom
+				gap: '8px',
+				padding: '6px 10px',
+				paddingBottom: '8px'  // Account for progress bar at bottom
 			});
 
-			// Thumbnail - compact size
+			// Thumbnail - smaller for compact pill
 			const thumbnail = document.createElement("div");
 			thumbnail.id = "vectrola-thumbnail";
 			thumbnail.className = "vectrola-thumbnail";  // Enable CSS animations
 			(thumbnail as HTMLElement).setCssStyles({
-				width: '40px',
-				height: '40px',
-				minWidth: '40px',
-				borderRadius: '8px',
+				width: '32px',
+				height: '32px',
+				minWidth: '32px',
+				borderRadius: '6px',
 				overflow: 'hidden',
 				flexShrink: '0',
 				display: 'flex',
@@ -1377,8 +1406,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 				setIconContent(thumbnail, 'music');
 				const svg = thumbnail.querySelector('svg');
 				if (svg) {
-					svg.style.width = '20px';
-					svg.style.height = '20px';
+					svg.style.width = '16px';
+					svg.style.height = '16px';
 					svg.style.color = 'rgba(255,255,255,0.6)';
 				}
 			}
@@ -1555,6 +1584,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 				if (isDragging) {
 					endDrag();
 				} else {
+					// Don't open full player if tap was on a button (play/pause or next)
+					const target = e.target as HTMLElement;
+					if (target.closest('button')) {
+						return; // Let the button's click handler deal with it
+					}
+
 					// Check if it was a tap (short duration, minimal movement)
 					const touch = e.changedTouches[0];
 					const deltaX = Math.abs(touch.clientX - tapStartX);
@@ -2060,12 +2095,16 @@ export default class VectrolaSyncPlugin extends Plugin {
 		queueHeader.append(queueTitle, queueSubtitle);
 
 		const queueList = document.createElement("div");
+		queueList.className = "vectrola-queue-list";  // Add class for rebuildQueueList to find
 		(queueList as HTMLElement).setCssStyles({
 			flex: '1',
 			overflowY: 'auto',
+			minHeight: '0',  // Critical for flex scroll
 			margin: '0 -20px',
 			padding: '0 20px'
 		});
+		// Enable momentum scrolling on iOS
+		queueList.style.setProperty('-webkit-overflow-scrolling', 'touch');
 
 		// Helper to create queue item
 		const createQueueItem = (track: TrackInfo, trackIdx: number, isCurrent: boolean, isPrevious: boolean) => {
@@ -2203,28 +2242,20 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return item;
 		};
 
-		// Build queue: previous tracks + current + next tracks
-		const prevCount = Math.min(2, player.currentIndex);
-		const nextCount = 4;
+		// Build queue: ALL tracks in playlist (scrollable)
+		player.playlist.forEach((track, idx) => {
+			const isCurrent = idx === player.currentIndex;
+			const isPrevious = idx < player.currentIndex;
+			queueList.appendChild(createQueueItem(track, idx, isCurrent, isPrevious));
+		});
 
-		// Previous tracks (muted)
-		for (let i = player.currentIndex - prevCount; i < player.currentIndex; i++) {
-			if (i >= 0 && player.playlist[i]) {
-				queueList.appendChild(createQueueItem(player.playlist[i], i, false, true));
+		// Auto-scroll to current track after render
+		setTimeout(() => {
+			if (player.currentIndex >= 0 && queueList.children[player.currentIndex]) {
+				const currentItem = queueList.children[player.currentIndex] as HTMLElement;
+				currentItem.scrollIntoView({ block: 'center', behavior: 'auto' });
 			}
-		}
-
-		// Current track (highlighted)
-		if (player.currentIndex >= 0 && player.playlist[player.currentIndex]) {
-			queueList.appendChild(createQueueItem(player.playlist[player.currentIndex], player.currentIndex, true, false));
-		}
-
-		// Next tracks
-		for (let i = player.currentIndex + 1; i <= player.currentIndex + nextCount; i++) {
-			if (player.playlist[i]) {
-				queueList.appendChild(createQueueItem(player.playlist[i], i, false, false));
-			}
-		}
+		}, 50);
 
 		queueSection.append(queueHeader, queueList);
 
@@ -2651,25 +2682,20 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return item;
 		};
 
-		// Build queue: previous + current + next
-		const prevCount = Math.min(2, player.currentIndex);
-		const nextCount = 4;
+		// Build queue: ALL tracks (scrollable)
+		player.playlist.forEach((track, idx) => {
+			const isCurrent = idx === player.currentIndex;
+			const isPrevious = idx < player.currentIndex;
+			queueList.appendChild(createQueueItem(track, idx, isCurrent, isPrevious));
+		});
 
-		for (let i = player.currentIndex - prevCount; i < player.currentIndex; i++) {
-			if (i >= 0 && player.playlist[i]) {
-				queueList.appendChild(createQueueItem(player.playlist[i], i, false, true));
+		// Auto-scroll to current track
+		setTimeout(() => {
+			if (player.currentIndex >= 0 && queueList.children[player.currentIndex]) {
+				const currentItem = queueList.children[player.currentIndex] as HTMLElement;
+				currentItem.scrollIntoView({ block: 'center', behavior: 'auto' });
 			}
-		}
-
-		if (player.currentIndex >= 0 && player.playlist[player.currentIndex]) {
-			queueList.appendChild(createQueueItem(player.playlist[player.currentIndex], player.currentIndex, true, false));
-		}
-
-		for (let i = player.currentIndex + 1; i <= player.currentIndex + nextCount; i++) {
-			if (player.playlist[i]) {
-				queueList.appendChild(createQueueItem(player.playlist[i], i, false, false));
-			}
-		}
+		}, 50);
 	}
 
 	private updateFullPlayerUI() {

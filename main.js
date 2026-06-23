@@ -1312,7 +1312,21 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     this.events = new import_obsidian5.Events();
   }
   async onload() {
+    var _a, _b, _c;
     await this.loadSettings();
+    document.querySelectorAll(".is-playing").forEach((el) => {
+      el.classList.remove("is-playing");
+    });
+    (_a = document.getElementById("vectrola-global-player")) == null ? void 0 : _a.remove();
+    (_b = document.getElementById("vectrola-full-player")) == null ? void 0 : _b.remove();
+    (_c = document.getElementById("vectrola-full-player-backdrop")) == null ? void 0 : _c.remove();
+    if (window.vectrolaPlayer) {
+      if (window.vectrolaPlayer.audio) {
+        window.vectrolaPlayer.audio.pause();
+        window.vectrolaPlayer.audio.currentTime = 0;
+      }
+      window.vectrolaPlayer.isPlaying = false;
+    }
     this.drive = createDriveClient(() => this.auth.getValidAccessToken());
     this.auth = createAuthManager({
       settings: this.settings,
@@ -1954,6 +1968,13 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     } else if (player.currentIndex >= 0) {
       player.shuffleHistory = [player.currentIndex];
     }
+    if (document.getElementById("vectrola-full-player")) {
+      this.updateFullPlayerUI();
+      const queueList = document.querySelector(".vectrola-queue-list");
+      if (queueList) {
+        this.rebuildQueueList(queueList);
+      }
+    }
   }
   toggleRepeat() {
     const player = window.vectrolaPlayer;
@@ -2309,7 +2330,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     playerBar.id = "vectrola-global-player";
     const pos = this.calculatePlayerPosition();
     if (import_obsidian5.Platform.isMobile) {
-      const safeBottom = "max(20px, env(safe-area-inset-bottom, 20px))";
+      const safeBottom = "max(16px, env(safe-area-inset-bottom, 16px))";
       playerBar.setCssStyles({
         position: "fixed",
         bottom: safeBottom,
@@ -2317,10 +2338,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         right: "12px",
         width: "auto",
         background: "rgba(28, 28, 30, 0.95)",
-        borderRadius: "28px",
-        // True pill shape (half of ~56px height)
+        borderRadius: "24px",
+        // True pill shape (half of ~48px height)
         boxShadow: "0 4px 20px rgba(0, 0, 0, 0.4)",
-        zIndex: "1000",
+        zIndex: "100",
+        // Lowered so Obsidian side menu overlaps
         overflow: "hidden",
         transition: "transform 0.2s ease, box-shadow 0.2s ease"
         // Smooth transitions
@@ -2337,10 +2359,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         bottom: "0",
         left: "0",
         right: "0",
-        height: "3px",
+        height: "2px",
+        // Thinner progress bar
         background: "rgba(255, 255, 255, 0.1)",
         cursor: "pointer",
-        borderRadius: "0 0 28px 28px"
+        borderRadius: "0 0 24px 24px"
         // Match bottom corners of pill
       });
       const progressFill = document.createElement("div");
@@ -2349,7 +2372,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         height: "100%",
         background: "#E53935",
         width: "0%",
-        borderRadius: "0 0 0 28px",
+        borderRadius: "0 0 0 24px",
         transition: "width 0.1s linear"
       });
       progressContainer.appendChild(progressFill);
@@ -2366,19 +2389,19 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         display: "flex",
         flexDirection: "row",
         alignItems: "center",
-        gap: "10px",
-        padding: "8px 14px",
-        paddingBottom: "11px"
+        gap: "8px",
+        padding: "6px 10px",
+        paddingBottom: "8px"
         // Account for progress bar at bottom
       });
       const thumbnail = document.createElement("div");
       thumbnail.id = "vectrola-thumbnail";
       thumbnail.className = "vectrola-thumbnail";
       thumbnail.setCssStyles({
-        width: "40px",
-        height: "40px",
-        minWidth: "40px",
-        borderRadius: "8px",
+        width: "32px",
+        height: "32px",
+        minWidth: "32px",
+        borderRadius: "6px",
         overflow: "hidden",
         flexShrink: "0",
         display: "flex",
@@ -2401,8 +2424,8 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         setIconContent(thumbnail, "music");
         const svg = thumbnail.querySelector("svg");
         if (svg) {
-          svg.style.width = "20px";
-          svg.style.height = "20px";
+          svg.style.width = "16px";
+          svg.style.height = "16px";
           svg.style.color = "rgba(255,255,255,0.6)";
         }
       }
@@ -2554,6 +2577,10 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         if (isDragging) {
           endDrag();
         } else {
+          const target = e.target;
+          if (target.closest("button")) {
+            return;
+          }
           const touch = e.changedTouches[0];
           const deltaX = Math.abs(touch.clientX - tapStartX);
           const deltaY = Math.abs(touch.clientY - tapStartY);
@@ -2986,12 +3013,16 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     });
     queueHeader.append(queueTitle, queueSubtitle);
     const queueList = document.createElement("div");
+    queueList.className = "vectrola-queue-list";
     queueList.setCssStyles({
       flex: "1",
       overflowY: "auto",
+      minHeight: "0",
+      // Critical for flex scroll
       margin: "0 -20px",
       padding: "0 20px"
     });
+    queueList.style.setProperty("-webkit-overflow-scrolling", "touch");
     const createQueueItem = (track, trackIdx, isCurrent, isPrevious) => {
       const item = document.createElement("div");
       item.setCssStyles({
@@ -3109,21 +3140,17 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       });
       return item;
     };
-    const prevCount = Math.min(2, player.currentIndex);
-    const nextCount = 4;
-    for (let i = player.currentIndex - prevCount; i < player.currentIndex; i++) {
-      if (i >= 0 && player.playlist[i]) {
-        queueList.appendChild(createQueueItem(player.playlist[i], i, false, true));
+    player.playlist.forEach((track, idx) => {
+      const isCurrent = idx === player.currentIndex;
+      const isPrevious = idx < player.currentIndex;
+      queueList.appendChild(createQueueItem(track, idx, isCurrent, isPrevious));
+    });
+    setTimeout(() => {
+      if (player.currentIndex >= 0 && queueList.children[player.currentIndex]) {
+        const currentItem = queueList.children[player.currentIndex];
+        currentItem.scrollIntoView({ block: "center", behavior: "auto" });
       }
-    }
-    if (player.currentIndex >= 0 && player.playlist[player.currentIndex]) {
-      queueList.appendChild(createQueueItem(player.playlist[player.currentIndex], player.currentIndex, true, false));
-    }
-    for (let i = player.currentIndex + 1; i <= player.currentIndex + nextCount; i++) {
-      if (player.playlist[i]) {
-        queueList.appendChild(createQueueItem(player.playlist[i], i, false, false));
-      }
-    }
+    }, 50);
     queueSection.append(queueHeader, queueList);
     const progressSection = document.createElement("div");
     progressSection.setCssStyles({
@@ -3487,21 +3514,17 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       });
       return item;
     };
-    const prevCount = Math.min(2, player.currentIndex);
-    const nextCount = 4;
-    for (let i = player.currentIndex - prevCount; i < player.currentIndex; i++) {
-      if (i >= 0 && player.playlist[i]) {
-        queueList.appendChild(createQueueItem(player.playlist[i], i, false, true));
+    player.playlist.forEach((track, idx) => {
+      const isCurrent = idx === player.currentIndex;
+      const isPrevious = idx < player.currentIndex;
+      queueList.appendChild(createQueueItem(track, idx, isCurrent, isPrevious));
+    });
+    setTimeout(() => {
+      if (player.currentIndex >= 0 && queueList.children[player.currentIndex]) {
+        const currentItem = queueList.children[player.currentIndex];
+        currentItem.scrollIntoView({ block: "center", behavior: "auto" });
       }
-    }
-    if (player.currentIndex >= 0 && player.playlist[player.currentIndex]) {
-      queueList.appendChild(createQueueItem(player.playlist[player.currentIndex], player.currentIndex, true, false));
-    }
-    for (let i = player.currentIndex + 1; i <= player.currentIndex + nextCount; i++) {
-      if (player.playlist[i]) {
-        queueList.appendChild(createQueueItem(player.playlist[i], i, false, false));
-      }
-    }
+    }, 50);
   }
   updateFullPlayerUI() {
     var _a, _b, _c;
