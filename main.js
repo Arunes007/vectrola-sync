@@ -1833,6 +1833,8 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       const link = document.createElement("a");
       link.textContent = track.title;
       link.href = "#";
+      link.style.textDecoration = "none";
+      link.style.color = "inherit";
       link.addEventListener("click", (e) => {
         e.preventDefault();
         if (track.link) {
@@ -2359,7 +2361,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     playerBar.id = "vectrola-global-player";
     const pos = this.calculatePlayerPosition();
     if (import_obsidian5.Platform.isMobile) {
-      const safeBottom = "max(60px, calc(48px + env(safe-area-inset-bottom, 12px)))";
+      const safeBottom = "max(70px, calc(58px + env(safe-area-inset-bottom, 12px)))";
       playerBar.setCssStyles({
         position: "fixed",
         bottom: safeBottom,
@@ -2493,25 +2495,19 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       });
       artistContainer.appendChild(trackArtist);
       trackInfo.append(titleContainer, artistContainer);
-      const enableMarqueeIfNeeded = () => {
+      const enableMarquee = () => {
         setTimeout(() => {
-          if (trackTitle.scrollWidth > titleContainer.clientWidth) {
-            const distance = trackTitle.scrollWidth - titleContainer.clientWidth + 10;
-            trackTitle.style.setProperty("--marquee-distance", `-${distance}px`);
-            trackTitle.classList.add("is-scrolling");
-          } else {
-            trackTitle.classList.remove("is-scrolling");
-          }
-          if (trackArtist.scrollWidth > artistContainer.clientWidth) {
-            const distance = trackArtist.scrollWidth - artistContainer.clientWidth + 10;
-            trackArtist.style.setProperty("--marquee-distance", `-${distance}px`);
-            trackArtist.classList.add("is-scrolling");
-          } else {
-            trackArtist.classList.remove("is-scrolling");
-          }
+          const titleOverflow = trackTitle.scrollWidth - titleContainer.clientWidth;
+          const titleDistance = titleOverflow > 0 ? titleOverflow + 10 : 20;
+          trackTitle.style.setProperty("--marquee-distance", `-${titleDistance}px`);
+          trackTitle.classList.add("is-scrolling");
+          const artistOverflow = trackArtist.scrollWidth - artistContainer.clientWidth;
+          const artistDistance = artistOverflow > 0 ? artistOverflow + 10 : 20;
+          trackArtist.style.setProperty("--marquee-distance", `-${artistDistance}px`);
+          trackArtist.classList.add("is-scrolling");
         }, 100);
       };
-      enableMarqueeIfNeeded();
+      enableMarquee();
       const miniControls = document.createElement("div");
       miniControls.setCssStyles({
         display: "flex",
@@ -3287,20 +3283,20 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       }
       return btn;
     };
-    const prevBtn = createControlBtn("previous", 48, 28);
+    const prevBtn = createControlBtn("previous", 56, 36);
     prevBtn.addEventListener("click", () => this.prevTrack());
-    const playPauseBtn = createControlBtn(player.isPlaying ? "pause" : "play", 64, 36);
+    const playPauseBtn = createControlBtn(player.isPlaying ? "pause" : "play", 72, 44);
     playPauseBtn.id = "vectrola-fp-playpause-btn";
     playPauseBtn.addEventListener("click", () => {
       this.togglePlayPause();
       setIconContent(playPauseBtn, player.isPlaying ? "pause" : "play");
       const svg = playPauseBtn.querySelector("svg");
       if (svg) {
-        svg.style.width = "36px";
-        svg.style.height = "36px";
+        svg.style.width = "44px";
+        svg.style.height = "44px";
       }
     });
-    const nextBtn = createControlBtn("next", 48, 28);
+    const nextBtn = createControlBtn("next", 56, 36);
     nextBtn.addEventListener("click", () => this.nextTrack());
     mainControls.append(prevBtn, playPauseBtn, nextBtn);
     const volumeSection = document.createElement("div");

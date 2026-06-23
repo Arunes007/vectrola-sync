@@ -693,6 +693,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 			const link = document.createElement("a");
 			link.textContent = track.title;
 			link.href = "#";
+			link.style.textDecoration = 'none';
+			link.style.color = 'inherit';
 			link.addEventListener("click", (e) => {
 				e.preventDefault();
 				if (track.link) {
@@ -1336,7 +1338,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (Platform.isMobile) {
 			// === MOBILE PLAYER BAR - Ultra-compact pill design (iOS-style) ===
 			// Use safe area inset for notched devices (iPhone X+)
-			const safeBottom = 'max(60px, calc(48px + env(safe-area-inset-bottom, 12px)))';
+			const safeBottom = 'max(70px, calc(58px + env(safe-area-inset-bottom, 12px)))';
 
 			(playerBar as HTMLElement).setCssStyles({
 				position: 'fixed',
@@ -1486,28 +1488,23 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			trackInfo.append(titleContainer, artistContainer);
 
-			// Enable marquee scrolling if text overflows
-			const enableMarqueeIfNeeded = () => {
+			// Enable marquee scrolling for all text (Apple Music style - always scrolls)
+			const enableMarquee = () => {
 				setTimeout(() => {
-					// Check title overflow
-					if (trackTitle.scrollWidth > titleContainer.clientWidth) {
-						const distance = trackTitle.scrollWidth - titleContainer.clientWidth + 10;
-						trackTitle.style.setProperty('--marquee-distance', `-${distance}px`);
-						trackTitle.classList.add('is-scrolling');
-					} else {
-						trackTitle.classList.remove('is-scrolling');
-					}
-					// Check artist overflow
-					if (trackArtist.scrollWidth > artistContainer.clientWidth) {
-						const distance = trackArtist.scrollWidth - artistContainer.clientWidth + 10;
-						trackArtist.style.setProperty('--marquee-distance', `-${distance}px`);
-						trackArtist.classList.add('is-scrolling');
-					} else {
-						trackArtist.classList.remove('is-scrolling');
-					}
+					// Calculate scroll distance for title (or use small default for short text)
+					const titleOverflow = trackTitle.scrollWidth - titleContainer.clientWidth;
+					const titleDistance = titleOverflow > 0 ? titleOverflow + 10 : 20;
+					trackTitle.style.setProperty('--marquee-distance', `-${titleDistance}px`);
+					trackTitle.classList.add('is-scrolling');
+
+					// Calculate scroll distance for artist (or use small default for short text)
+					const artistOverflow = trackArtist.scrollWidth - artistContainer.clientWidth;
+					const artistDistance = artistOverflow > 0 ? artistOverflow + 10 : 20;
+					trackArtist.style.setProperty('--marquee-distance', `-${artistDistance}px`);
+					trackArtist.classList.add('is-scrolling');
 				}, 100); // Small delay to let DOM render
 			};
-			enableMarqueeIfNeeded();
+			enableMarquee();
 
 			// Mini controls - HORIZONTAL
 			const miniControls = document.createElement("div");
@@ -2423,22 +2420,22 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return btn;
 		};
 
-		const prevBtn = createControlBtn('previous', 48, 28);
+		const prevBtn = createControlBtn('previous', 56, 36);
 		prevBtn.addEventListener("click", () => this.prevTrack());
 
-		const playPauseBtn = createControlBtn(player.isPlaying ? 'pause' : 'play', 64, 36);
+		const playPauseBtn = createControlBtn(player.isPlaying ? 'pause' : 'play', 72, 44);
 		playPauseBtn.id = "vectrola-fp-playpause-btn";
 		playPauseBtn.addEventListener("click", () => {
 			this.togglePlayPause();
 			setIconContent(playPauseBtn, player.isPlaying ? 'pause' : 'play');
 			const svg = playPauseBtn.querySelector('svg');
 			if (svg) {
-				svg.style.width = '36px';
-				svg.style.height = '36px';
+				svg.style.width = '44px';
+				svg.style.height = '44px';
 			}
 		});
 
-		const nextBtn = createControlBtn('next', 48, 28);
+		const nextBtn = createControlBtn('next', 56, 36);
 		nextBtn.addEventListener("click", () => this.nextTrack());
 
 		mainControls.append(prevBtn, playPauseBtn, nextBtn);
