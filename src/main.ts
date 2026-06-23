@@ -1142,8 +1142,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 				if (Platform.isMobile) {
 					const svg = gradient.querySelector('svg');
 					if (svg) {
-						svg.style.width = '18px';
-						svg.style.height = '18px';
+						svg.style.width = '19px';
+						svg.style.height = '19px';
 						svg.style.color = 'rgba(255,255,255,0.6)';
 					}
 				}
@@ -1157,8 +1157,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 			if (Platform.isMobile) {
 				const svg = gradient.querySelector('svg');
 				if (svg) {
-					svg.style.width = '18px';
-					svg.style.height = '18px';
+					svg.style.width = '19px';
+					svg.style.height = '19px';
 					svg.style.color = 'rgba(255,255,255,0.6)';
 				}
 			}
@@ -1406,8 +1406,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 				setIconContent(thumbnail, 'music');
 				const svg = thumbnail.querySelector('svg');
 				if (svg) {
-					svg.style.width = '16px';
-					svg.style.height = '16px';
+					svg.style.width = '19px';
+					svg.style.height = '19px';
 					svg.style.color = 'rgba(255,255,255,0.6)';
 				}
 			}
