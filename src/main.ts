@@ -1899,24 +1899,31 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		const artwork = document.createElement("div");
 		artwork.id = "vectrola-fp-artwork";
+		artwork.className = "vectrola-fp-artwork";  // For pulse animation
 		(artwork as HTMLElement).setCssStyles({
 			width: '80px',
 			height: '80px',
 			minWidth: '80px',
 			borderRadius: '8px',
-			overflow: 'hidden',
+			overflow: 'visible',  // Allow pulse border to show outside
 			display: 'flex',
 			alignItems: 'center',
 			justifyContent: 'center',
-			background: 'linear-gradient(135deg, #2d3436 0%, #636e72 100%)'
+			background: 'linear-gradient(135deg, #2d3436 0%, #636e72 100%)',
+			position: 'relative'  // For ::after pseudo-element
 		});
+		// Add is-playing class if currently playing
+		if (player.isPlaying) {
+			artwork.classList.add('is-playing');
+		}
 		if (player.currentTrack?.artwork_url) {
 			const img = document.createElement("img");
 			img.src = player.currentTrack.artwork_url;
 			(img as HTMLElement).setCssStyles({
 				width: '100%',
 				height: '100%',
-				objectFit: 'cover'
+				objectFit: 'cover',
+				borderRadius: '8px'
 			});
 			artwork.appendChild(img);
 		} else {
@@ -2242,18 +2249,22 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return item;
 		};
 
-		// Build queue: ALL tracks in playlist (scrollable)
+		// Build queue: ALL tracks EXCEPT current (current is shown in header)
 		player.playlist.forEach((track, idx) => {
-			const isCurrent = idx === player.currentIndex;
+			if (idx === player.currentIndex) return; // Skip current track - it's in the header
 			const isPrevious = idx < player.currentIndex;
-			queueList.appendChild(createQueueItem(track, idx, isCurrent, isPrevious));
+			queueList.appendChild(createQueueItem(track, idx, false, isPrevious));
 		});
 
-		// Auto-scroll to current track after render
+		// Auto-scroll to show tracks near current position
 		setTimeout(() => {
-			if (player.currentIndex >= 0 && queueList.children[player.currentIndex]) {
-				const currentItem = queueList.children[player.currentIndex] as HTMLElement;
-				currentItem.scrollIntoView({ block: 'center', behavior: 'auto' });
+			// Find the first "next" track (right after current) and scroll to it
+			const nextIdx = player.currentIndex + 1;
+			if (nextIdx < player.playlist.length) {
+				// Account for skipped current track in DOM children
+				const domIdx = nextIdx > player.currentIndex ? nextIdx - 1 : nextIdx;
+				const nextItem = queueList.children[Math.min(domIdx, queueList.children.length - 1)] as HTMLElement;
+				nextItem?.scrollIntoView({ block: 'start', behavior: 'auto' });
 			}
 		}, 50);
 
@@ -2677,30 +2688,29 @@ export default class VectrolaSyncPlugin extends Plugin {
 			item.append(itemArt, itemInfo, dragIcon);
 
 			item.addEventListener("click", () => {
-				if (isCurrent) {
-					this.togglePlayPause();
-				} else {
-					this.playTrack(trackIdx);
-					this.updateFullPlayerUI();
-					this.rebuildQueueList(queueList);
-				}
+				// All items are non-current (current is in header), so just play
+				this.playTrack(trackIdx);
+				this.updateFullPlayerUI();
+				this.rebuildQueueList(queueList);
 			});
 
 			return item;
 		};
 
-		// Build queue: ALL tracks (scrollable)
+		// Build queue: ALL tracks EXCEPT current (current is shown in header)
 		player.playlist.forEach((track, idx) => {
-			const isCurrent = idx === player.currentIndex;
+			if (idx === player.currentIndex) return; // Skip current track
 			const isPrevious = idx < player.currentIndex;
-			queueList.appendChild(createQueueItem(track, idx, isCurrent, isPrevious));
+			queueList.appendChild(createQueueItem(track, idx, false, isPrevious));
 		});
 
-		// Auto-scroll to current track
+		// Auto-scroll to show tracks near current position
 		setTimeout(() => {
-			if (player.currentIndex >= 0 && queueList.children[player.currentIndex]) {
-				const currentItem = queueList.children[player.currentIndex] as HTMLElement;
-				currentItem.scrollIntoView({ block: 'center', behavior: 'auto' });
+			const nextIdx = player.currentIndex + 1;
+			if (nextIdx < player.playlist.length && queueList.children.length > 0) {
+				// First child after current is at index 0 if current was skipped
+				const firstNextItem = queueList.children[0] as HTMLElement;
+				firstNextItem?.scrollIntoView({ block: 'start', behavior: 'auto' });
 			}
 		}, 50);
 	}
@@ -2724,7 +2734,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 				(img as HTMLElement).setCssStyles({
 					width: '100%',
 					height: '100%',
-					objectFit: 'cover'
+					objectFit: 'cover',
+					borderRadius: '8px'
 				});
 				artwork.appendChild(img);
 			} else {
@@ -2735,6 +2746,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 					svg.style.height = '32px';
 					svg.style.color = 'rgba(255,255,255,0.6)';
 				}
+			}
+			// Update pulse animation based on playing state
+			if (player.isPlaying) {
+				artwork.classList.add('is-playing');
+			} else {
+				artwork.classList.remove('is-playing');
 			}
 		}
 	}
@@ -2765,6 +2782,16 @@ export default class VectrolaSyncPlugin extends Plugin {
 				if (svg) {
 					svg.style.width = '36px';
 					svg.style.height = '36px';
+				}
+			}
+
+			// Update header artwork pulse based on playing state
+			const artwork = document.getElementById("vectrola-fp-artwork");
+			if (artwork) {
+				if (player.isPlaying) {
+					artwork.classList.add('is-playing');
+				} else {
+					artwork.classList.remove('is-playing');
 				}
 			}
 

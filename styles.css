@@ -782,6 +782,17 @@
 		animation: vectrola-pulse 2s ease-in-out infinite;
 		pointer-events: none;
 	}
+
+	/* Full player header artwork pulse animation */
+	.vectrola-fp-artwork.is-playing::after {
+		content: '';
+		position: absolute;
+		inset: -3px;
+		border: 3px solid #E53935;
+		border-radius: 11px;
+		animation: vectrola-pulse 2s ease-in-out infinite;
+		pointer-events: none;
+	}
 }
 
 

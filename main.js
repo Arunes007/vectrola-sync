@@ -2838,24 +2838,32 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     });
     const artwork = document.createElement("div");
     artwork.id = "vectrola-fp-artwork";
+    artwork.className = "vectrola-fp-artwork";
     artwork.setCssStyles({
       width: "80px",
       height: "80px",
       minWidth: "80px",
       borderRadius: "8px",
-      overflow: "hidden",
+      overflow: "visible",
+      // Allow pulse border to show outside
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      background: "linear-gradient(135deg, #2d3436 0%, #636e72 100%)"
+      background: "linear-gradient(135deg, #2d3436 0%, #636e72 100%)",
+      position: "relative"
+      // For ::after pseudo-element
     });
+    if (player.isPlaying) {
+      artwork.classList.add("is-playing");
+    }
     if ((_c = player.currentTrack) == null ? void 0 : _c.artwork_url) {
       const img = document.createElement("img");
       img.src = player.currentTrack.artwork_url;
       img.setCssStyles({
         width: "100%",
         height: "100%",
-        objectFit: "cover"
+        objectFit: "cover",
+        borderRadius: "8px"
       });
       artwork.appendChild(img);
     } else {
@@ -3141,14 +3149,17 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       return item;
     };
     player.playlist.forEach((track, idx) => {
-      const isCurrent = idx === player.currentIndex;
+      if (idx === player.currentIndex)
+        return;
       const isPrevious = idx < player.currentIndex;
-      queueList.appendChild(createQueueItem(track, idx, isCurrent, isPrevious));
+      queueList.appendChild(createQueueItem(track, idx, false, isPrevious));
     });
     setTimeout(() => {
-      if (player.currentIndex >= 0 && queueList.children[player.currentIndex]) {
-        const currentItem = queueList.children[player.currentIndex];
-        currentItem.scrollIntoView({ block: "center", behavior: "auto" });
+      const nextIdx = player.currentIndex + 1;
+      if (nextIdx < player.playlist.length) {
+        const domIdx = nextIdx > player.currentIndex ? nextIdx - 1 : nextIdx;
+        const nextItem = queueList.children[Math.min(domIdx, queueList.children.length - 1)];
+        nextItem == null ? void 0 : nextItem.scrollIntoView({ block: "start", behavior: "auto" });
       }
     }, 50);
     queueSection.append(queueHeader, queueList);
@@ -3505,25 +3516,23 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       }
       item.append(itemArt, itemInfo, dragIcon);
       item.addEventListener("click", () => {
-        if (isCurrent) {
-          this.togglePlayPause();
-        } else {
-          this.playTrack(trackIdx);
-          this.updateFullPlayerUI();
-          this.rebuildQueueList(queueList);
-        }
+        this.playTrack(trackIdx);
+        this.updateFullPlayerUI();
+        this.rebuildQueueList(queueList);
       });
       return item;
     };
     player.playlist.forEach((track, idx) => {
-      const isCurrent = idx === player.currentIndex;
+      if (idx === player.currentIndex)
+        return;
       const isPrevious = idx < player.currentIndex;
-      queueList.appendChild(createQueueItem(track, idx, isCurrent, isPrevious));
+      queueList.appendChild(createQueueItem(track, idx, false, isPrevious));
     });
     setTimeout(() => {
-      if (player.currentIndex >= 0 && queueList.children[player.currentIndex]) {
-        const currentItem = queueList.children[player.currentIndex];
-        currentItem.scrollIntoView({ block: "center", behavior: "auto" });
+      const nextIdx = player.currentIndex + 1;
+      if (nextIdx < player.playlist.length && queueList.children.length > 0) {
+        const firstNextItem = queueList.children[0];
+        firstNextItem == null ? void 0 : firstNextItem.scrollIntoView({ block: "start", behavior: "auto" });
       }
     }, 50);
   }
@@ -3547,7 +3556,8 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         img.setCssStyles({
           width: "100%",
           height: "100%",
-          objectFit: "cover"
+          objectFit: "cover",
+          borderRadius: "8px"
         });
         artwork.appendChild(img);
       } else {
@@ -3558,6 +3568,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
           svg.style.height = "32px";
           svg.style.color = "rgba(255,255,255,0.6)";
         }
+      }
+      if (player.isPlaying) {
+        artwork.classList.add("is-playing");
+      } else {
+        artwork.classList.remove("is-playing");
       }
     }
   }
@@ -3586,6 +3601,14 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         if (svg) {
           svg.style.width = "36px";
           svg.style.height = "36px";
+        }
+      }
+      const artwork = document.getElementById("vectrola-fp-artwork");
+      if (artwork) {
+        if (player.isPlaying) {
+          artwork.classList.add("is-playing");
+        } else {
+          artwork.classList.remove("is-playing");
         }
       }
       if (document.getElementById("vectrola-full-player")) {
