@@ -344,18 +344,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			// Update track highlight for this page's list
 			const updateLocalHighlight = () => {
-				console.log('[Vectrola] updateLocalHighlight called', {
-					currentTrack: player.currentTrack?.title,
-					currentTrackId: player.currentTrack?.track_id,
-					currentIndex: player.currentIndex,
-					playlistSource: player.playlistSource,
-					pageTitle: pageTitle,
-					rowCount: trackListEl.querySelectorAll(".vectrola-track-row").length
-				});
 				trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
 					const track = playlist[i];
 					const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
-					console.log(`[Vectrola] Row ${i}: track_id=${track.track_id}, isCurrentTrack=${isCurrentTrack}`);
 					row.classList.toggle("is-playing", !!isCurrentTrack);
 					// Also toggle audio-playing based on whether audio is actually playing
 					row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
@@ -1345,13 +1336,13 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (Platform.isMobile) {
 			// === MOBILE PLAYER BAR - Ultra-compact pill design (iOS-style) ===
 			// Use safe area inset for notched devices (iPhone X+)
-			const safeBottom = 'max(16px, env(safe-area-inset-bottom, 16px))';
+			const safeBottom = 'max(60px, calc(48px + env(safe-area-inset-bottom, 12px)))';
 
 			(playerBar as HTMLElement).setCssStyles({
 				position: 'fixed',
 				bottom: safeBottom,
-				left: '16px',
-				right: '16px',
+				left: '30px',
+				right: '30px',
 				width: 'auto',
 				background: 'rgba(28, 28, 30, 0.95)',
 				borderRadius: '20px',  // Slightly smaller radius for thinner pill
@@ -1459,31 +1450,64 @@ export default class VectrolaSyncPlugin extends Plugin {
 				overflow: 'hidden'
 			});
 
+			// Title container with marquee support
+			const titleContainer = document.createElement("div");
+			titleContainer.className = "vectrola-mobile-marquee-container";
+
 			const trackTitle = document.createElement("div");
 			trackTitle.id = "vectrola-track-title";
+			trackTitle.className = "vectrola-mobile-marquee-text";
 			trackTitle.textContent = player.currentTrack?.title || "Select a track";
 			(trackTitle as HTMLElement).setCssStyles({
 				fontSize: '14px',
 				fontWeight: '600',
 				color: 'white',
 				whiteSpace: 'nowrap',
-				overflow: 'hidden',
-				textOverflow: 'ellipsis',
-				lineHeight: '1.3'
+				lineHeight: '1.3',
+				textDecoration: 'none'
 			});
+			titleContainer.appendChild(trackTitle);
+
+			// Artist container with marquee support
+			const artistContainer = document.createElement("div");
+			artistContainer.className = "vectrola-mobile-marquee-container";
 
 			const trackArtist = document.createElement("div");
 			trackArtist.id = "vectrola-track-artist";
+			trackArtist.className = "vectrola-mobile-marquee-text artist-text";
 			trackArtist.textContent = player.currentTrack?.artist || "";
 			(trackArtist as HTMLElement).setCssStyles({
 				fontSize: '12px',
 				color: 'rgba(255, 255, 255, 0.6)',
 				whiteSpace: 'nowrap',
-				overflow: 'hidden',
-				textOverflow: 'ellipsis'
+				textDecoration: 'none'
 			});
+			artistContainer.appendChild(trackArtist);
 
-			trackInfo.append(trackTitle, trackArtist);
+			trackInfo.append(titleContainer, artistContainer);
+
+			// Enable marquee scrolling if text overflows
+			const enableMarqueeIfNeeded = () => {
+				setTimeout(() => {
+					// Check title overflow
+					if (trackTitle.scrollWidth > titleContainer.clientWidth) {
+						const distance = trackTitle.scrollWidth - titleContainer.clientWidth + 10;
+						trackTitle.style.setProperty('--marquee-distance', `-${distance}px`);
+						trackTitle.classList.add('is-scrolling');
+					} else {
+						trackTitle.classList.remove('is-scrolling');
+					}
+					// Check artist overflow
+					if (trackArtist.scrollWidth > artistContainer.clientWidth) {
+						const distance = trackArtist.scrollWidth - artistContainer.clientWidth + 10;
+						trackArtist.style.setProperty('--marquee-distance', `-${distance}px`);
+						trackArtist.classList.add('is-scrolling');
+					} else {
+						trackArtist.classList.remove('is-scrolling');
+					}
+				}, 100); // Small delay to let DOM render
+			};
+			enableMarqueeIfNeeded();
 
 			// Mini controls - HORIZONTAL
 			const miniControls = document.createElement("div");

@@ -1538,19 +1538,9 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       const trackListEl = container.createEl("div");
       trackListEl.className = "vectrola-track-list";
       const updateLocalHighlight = () => {
-        var _a2, _b2;
-        console.log("[Vectrola] updateLocalHighlight called", {
-          currentTrack: (_a2 = player.currentTrack) == null ? void 0 : _a2.title,
-          currentTrackId: (_b2 = player.currentTrack) == null ? void 0 : _b2.track_id,
-          currentIndex: player.currentIndex,
-          playlistSource: player.playlistSource,
-          pageTitle,
-          rowCount: trackListEl.querySelectorAll(".vectrola-track-row").length
-        });
         trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
           const track = playlist[i];
           const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
-          console.log(`[Vectrola] Row ${i}: track_id=${track.track_id}, isCurrentTrack=${isCurrentTrack}`);
           row.classList.toggle("is-playing", !!isCurrentTrack);
           row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
         });
@@ -2369,12 +2359,12 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     playerBar.id = "vectrola-global-player";
     const pos = this.calculatePlayerPosition();
     if (import_obsidian5.Platform.isMobile) {
-      const safeBottom = "max(16px, env(safe-area-inset-bottom, 16px))";
+      const safeBottom = "max(60px, calc(48px + env(safe-area-inset-bottom, 12px)))";
       playerBar.setCssStyles({
         position: "fixed",
         bottom: safeBottom,
-        left: "16px",
-        right: "16px",
+        left: "30px",
+        right: "30px",
         width: "auto",
         background: "rgba(28, 28, 30, 0.95)",
         borderRadius: "20px",
@@ -2474,29 +2464,54 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         minWidth: "0",
         overflow: "hidden"
       });
+      const titleContainer = document.createElement("div");
+      titleContainer.className = "vectrola-mobile-marquee-container";
       const trackTitle = document.createElement("div");
       trackTitle.id = "vectrola-track-title";
+      trackTitle.className = "vectrola-mobile-marquee-text";
       trackTitle.textContent = ((_b = player.currentTrack) == null ? void 0 : _b.title) || "Select a track";
       trackTitle.setCssStyles({
         fontSize: "14px",
         fontWeight: "600",
         color: "white",
         whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        lineHeight: "1.3"
+        lineHeight: "1.3",
+        textDecoration: "none"
       });
+      titleContainer.appendChild(trackTitle);
+      const artistContainer = document.createElement("div");
+      artistContainer.className = "vectrola-mobile-marquee-container";
       const trackArtist = document.createElement("div");
       trackArtist.id = "vectrola-track-artist";
+      trackArtist.className = "vectrola-mobile-marquee-text artist-text";
       trackArtist.textContent = ((_c = player.currentTrack) == null ? void 0 : _c.artist) || "";
       trackArtist.setCssStyles({
         fontSize: "12px",
         color: "rgba(255, 255, 255, 0.6)",
         whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis"
+        textDecoration: "none"
       });
-      trackInfo.append(trackTitle, trackArtist);
+      artistContainer.appendChild(trackArtist);
+      trackInfo.append(titleContainer, artistContainer);
+      const enableMarqueeIfNeeded = () => {
+        setTimeout(() => {
+          if (trackTitle.scrollWidth > titleContainer.clientWidth) {
+            const distance = trackTitle.scrollWidth - titleContainer.clientWidth + 10;
+            trackTitle.style.setProperty("--marquee-distance", `-${distance}px`);
+            trackTitle.classList.add("is-scrolling");
+          } else {
+            trackTitle.classList.remove("is-scrolling");
+          }
+          if (trackArtist.scrollWidth > artistContainer.clientWidth) {
+            const distance = trackArtist.scrollWidth - artistContainer.clientWidth + 10;
+            trackArtist.style.setProperty("--marquee-distance", `-${distance}px`);
+            trackArtist.classList.add("is-scrolling");
+          } else {
+            trackArtist.classList.remove("is-scrolling");
+          }
+        }, 100);
+      };
+      enableMarqueeIfNeeded();
       const miniControls = document.createElement("div");
       miniControls.setCssStyles({
         display: "flex",

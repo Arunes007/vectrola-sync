@@ -650,6 +650,41 @@
 	}
 }
 
+/* Mobile capsule marquee - scrolls back and forth with pauses */
+@keyframes vectrola-mobile-marquee {
+	0%, 15% {
+		transform: translateX(0);
+	}
+	45%, 55% {
+		transform: translateX(var(--marquee-distance, -50%));
+	}
+	85%, 100% {
+		transform: translateX(0);
+	}
+}
+
+/* Mobile capsule text styles */
+.vectrola-mobile-marquee-container {
+	overflow: hidden;
+	position: relative;
+	width: 100%;
+}
+
+.vectrola-mobile-marquee-text {
+	display: inline-block;
+	white-space: nowrap;
+	padding-right: 20px; /* Gap before repeat */
+}
+
+.vectrola-mobile-marquee-text.is-scrolling {
+	animation: vectrola-mobile-marquee 8s ease-in-out infinite;
+}
+
+/* Stagger artist animation */
+.vectrola-mobile-marquee-text.is-scrolling.artist-text {
+	animation-delay: 4s; /* Start halfway through title animation */
+}
+
 /* Click flash animation */
 @keyframes vectrola-click-flash {
 	0% {
