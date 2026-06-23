@@ -2341,8 +2341,8 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         borderRadius: "24px",
         // True pill shape (half of ~48px height)
         boxShadow: "0 4px 20px rgba(0, 0, 0, 0.4)",
-        zIndex: "100",
-        // Lowered so Obsidian side menu overlaps
+        zIndex: "10",
+        // Very low so Obsidian side menu overlaps
         overflow: "hidden",
         transition: "transform 0.2s ease, box-shadow 0.2s ease"
         // Smooth transitions
@@ -3319,11 +3319,12 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     let gestureStartTime = 0;
     let isGesturing = false;
     fullPlayer.addEventListener("touchstart", (e) => {
+      const target = e.target;
       const touchY = e.touches[0].clientY;
       const rect = fullPlayer.getBoundingClientRect();
-      const isNearTop = touchY - rect.top < 100;
-      const isScrolledToTop = fullPlayer.scrollTop <= 0;
-      if (isNearTop || isScrolledToTop) {
+      const isInDragHandle = touchY - rect.top < 60;
+      const isInQueueList = target.closest(".vectrola-queue-list") !== null;
+      if (isInDragHandle || !isInQueueList && fullPlayer.scrollTop <= 0) {
         gestureStartY = e.touches[0].clientY;
         gestureStartTime = Date.now();
         currentTranslateY = 0;

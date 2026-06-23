@@ -748,7 +748,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			if ('mediaSession' in navigator) {
 				navigator.mediaSession.playbackState = 'paused';
 			}
-			// Stop marquee animation
+			// Stop marquee and pulse animations
 			document.querySelector(".vectrola-track-artist-container")?.classList.remove("is-playing");
 			document.getElementById("vectrola-thumbnail")?.classList.remove("is-playing");
 			// Stop equalizer animation on track rows
@@ -1317,7 +1317,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				background: 'rgba(28, 28, 30, 0.95)',
 				borderRadius: '24px',  // True pill shape (half of ~48px height)
 				boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
-				zIndex: '100',  // Lowered so Obsidian side menu overlaps
+				zIndex: '10',  // Very low so Obsidian side menu overlaps
 				overflow: 'hidden',
 				transition: 'transform 0.2s ease, box-shadow 0.2s ease'  // Smooth transitions
 			});
@@ -2453,13 +2453,20 @@ export default class VectrolaSyncPlugin extends Plugin {
 		let isGesturing = false;
 
 		fullPlayer.addEventListener('touchstart', (e) => {
-			// Only start gesture from top area (drag handle region) or if scrolled to top
+			const target = e.target as HTMLElement;
 			const touchY = e.touches[0].clientY;
 			const rect = fullPlayer.getBoundingClientRect();
-			const isNearTop = touchY - rect.top < 100;
-			const isScrolledToTop = fullPlayer.scrollTop <= 0;
 
-			if (isNearTop || isScrolledToTop) {
+			// Check if touch is in the drag handle area (top 60px)
+			const isInDragHandle = touchY - rect.top < 60;
+
+			// Check if touch originated inside the queue list (allow normal scrolling there)
+			const isInQueueList = target.closest('.vectrola-queue-list') !== null;
+
+			// Only start dismiss gesture if:
+			// 1. Touch is in the drag handle area, OR
+			// 2. Touch is NOT in queue list AND player is scrolled to top
+			if (isInDragHandle || (!isInQueueList && fullPlayer.scrollTop <= 0)) {
 				gestureStartY = e.touches[0].clientY;
 				gestureStartTime = Date.now();
 				currentTranslateY = 0;
