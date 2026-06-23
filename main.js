@@ -1653,25 +1653,40 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       }
     });
     if ("mediaSession" in navigator) {
-      navigator.mediaSession.setActionHandler("play", () => {
-        if (player.audio.paused)
-          this.togglePlayPause();
-      });
-      navigator.mediaSession.setActionHandler("pause", () => {
-        if (!player.audio.paused)
-          this.togglePlayPause();
-      });
-      navigator.mediaSession.setActionHandler("nexttrack", () => {
-        this.nextTrack();
-      });
-      navigator.mediaSession.setActionHandler("previoustrack", () => {
-        this.prevTrack();
-      });
-      navigator.mediaSession.setActionHandler("seekto", (details) => {
-        if (details.seekTime !== void 0 && details.seekTime !== null) {
-          player.audio.currentTime = details.seekTime;
-        }
-      });
+      try {
+        navigator.mediaSession.setActionHandler("play", () => {
+          if (player.audio.paused)
+            this.togglePlayPause();
+        });
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("pause", () => {
+          if (!player.audio.paused)
+            this.togglePlayPause();
+        });
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("nexttrack", () => {
+          this.nextTrack();
+        });
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("previoustrack", () => {
+          this.prevTrack();
+        });
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("seekto", (details) => {
+          if (details.seekTime !== void 0 && details.seekTime !== null) {
+            player.audio.currentTime = details.seekTime;
+          }
+        });
+      } catch (e) {
+      }
     }
   }
   formatTime(seconds) {
@@ -1923,6 +1938,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       player.audio.play().catch((e) => console.error("Playback failed:", e));
       return;
     }
+    let nextIndex;
     if (player.shuffleMode) {
       const unplayed = player.playlist.map((_, i) => i).filter((i) => !player.shuffleHistory.includes(i));
       if (unplayed.length === 0) {
@@ -1932,26 +1948,39 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         }
         return;
       }
-      const randomIndex = unplayed[Math.floor(Math.random() * unplayed.length)];
-      this.playTrack(randomIndex);
+      nextIndex = unplayed[Math.floor(Math.random() * unplayed.length)];
     } else {
-      const nextIndex = (player.currentIndex + 1) % player.playlist.length;
+      nextIndex = (player.currentIndex + 1) % player.playlist.length;
       if (nextIndex === 0 && player.repeatMode === "off") {
         return;
       }
-      this.playTrack(nextIndex);
     }
+    player.currentIndex = nextIndex;
+    player.currentTrack = player.playlist[nextIndex];
+    this.updateFullPlayerUI();
+    const queueList = document.querySelector(".vectrola-queue-list");
+    if (queueList)
+      this.rebuildQueueList(queueList);
+    this.playTrack(nextIndex);
   }
   prevTrack() {
     const player = window.vectrolaPlayer;
     if (!player || !player.playlist.length)
       return;
+    let prevIndex;
     if (player.shuffleMode && player.shuffleHistory.length > 1) {
       player.shuffleHistory.pop();
-      this.playTrack(player.shuffleHistory[player.shuffleHistory.length - 1]);
+      prevIndex = player.shuffleHistory[player.shuffleHistory.length - 1];
     } else {
-      this.playTrack(player.currentIndex <= 0 ? player.playlist.length - 1 : player.currentIndex - 1);
+      prevIndex = player.currentIndex <= 0 ? player.playlist.length - 1 : player.currentIndex - 1;
     }
+    player.currentIndex = prevIndex;
+    player.currentTrack = player.playlist[prevIndex];
+    this.updateFullPlayerUI();
+    const queueList = document.querySelector(".vectrola-queue-list");
+    if (queueList)
+      this.rebuildQueueList(queueList);
+    this.playTrack(prevIndex);
   }
   toggleShuffle() {
     const player = window.vectrolaPlayer;
@@ -2334,12 +2363,12 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       playerBar.setCssStyles({
         position: "fixed",
         bottom: safeBottom,
-        left: "12px",
-        right: "12px",
+        left: "16px",
+        right: "16px",
         width: "auto",
         background: "rgba(28, 28, 30, 0.95)",
-        borderRadius: "24px",
-        // True pill shape (half of ~48px height)
+        borderRadius: "20px",
+        // Slightly smaller radius for thinner pill
         boxShadow: "0 4px 20px rgba(0, 0, 0, 0.4)",
         zIndex: "10",
         // Very low so Obsidian side menu overlaps
@@ -2363,7 +2392,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         // Thinner progress bar
         background: "rgba(255, 255, 255, 0.1)",
         cursor: "pointer",
-        borderRadius: "0 0 24px 24px"
+        borderRadius: "0 0 20px 20px"
         // Match bottom corners of pill
       });
       const progressFill = document.createElement("div");
@@ -2372,7 +2401,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         height: "100%",
         background: "#E53935",
         width: "0%",
-        borderRadius: "0 0 0 24px",
+        borderRadius: "0 0 0 20px",
         transition: "width 0.1s linear"
       });
       progressContainer.appendChild(progressFill);
@@ -2390,17 +2419,17 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         flexDirection: "row",
         alignItems: "center",
         gap: "8px",
-        padding: "6px 10px",
-        paddingBottom: "8px"
+        padding: "4px 8px",
+        paddingBottom: "6px"
         // Account for progress bar at bottom
       });
       const thumbnail = document.createElement("div");
       thumbnail.id = "vectrola-thumbnail";
       thumbnail.className = "vectrola-thumbnail";
       thumbnail.setCssStyles({
-        width: "32px",
-        height: "32px",
-        minWidth: "32px",
+        width: "28px",
+        height: "28px",
+        minWidth: "28px",
         borderRadius: "6px",
         overflow: "hidden",
         flexShrink: "0",
@@ -2469,9 +2498,9 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       const playPauseBtn = document.createElement("button");
       playPauseBtn.id = "vectrola-playpause-btn";
       playPauseBtn.setCssStyles({
-        width: "36px",
-        height: "36px",
-        minWidth: "36px",
+        width: "32px",
+        height: "32px",
+        minWidth: "32px",
         border: "none",
         background: "transparent",
         borderRadius: "50%",
@@ -2489,9 +2518,9 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       });
       const nextBtn = document.createElement("button");
       nextBtn.setCssStyles({
-        width: "36px",
-        height: "36px",
-        minWidth: "36px",
+        width: "32px",
+        height: "32px",
+        minWidth: "32px",
         border: "none",
         background: "transparent",
         borderRadius: "50%",
@@ -2543,6 +2572,9 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         tapStartX = touch.clientX;
         tapStartY = touch.clientY;
         longPressTimer = setTimeout(() => startDrag(), LONG_PRESS_DURATION);
+        barEl.style.transform = "scale(0.98)";
+        if (navigator.vibrate)
+          navigator.vibrate(10);
       }, { passive: true });
       content.addEventListener("touchmove", (e) => {
         const touch = e.touches[0];
@@ -2567,6 +2599,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         if (isDragging) {
           endDrag();
         } else {
+          barEl.style.transform = "scale(1)";
           const target = e.target;
           if (target.closest("button")) {
             return;
@@ -2585,6 +2618,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
           clearTimeout(longPressTimer);
           longPressTimer = null;
         }
+        barEl.style.transform = "scale(1)";
         endDrag();
       });
       playerBar.append(progressContainer, content);
@@ -3102,7 +3136,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         textEl.textContent = `${track.title} - ${track.artist}`;
         textEl.setCssStyles({
           fontSize: "15px",
-          color: isPrevious ? "rgba(255, 255, 255, 0.5)" : "rgba(255, 255, 255, 0.9)",
+          color: "rgba(255, 255, 255, 0.9)",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis"
@@ -3477,7 +3511,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         textEl.textContent = `${track.title} - ${track.artist}`;
         textEl.setCssStyles({
           fontSize: "15px",
-          color: isPrevious ? "rgba(255, 255, 255, 0.5)" : "rgba(255, 255, 255, 0.9)",
+          color: "rgba(255, 255, 255, 0.9)",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis"

@@ -496,23 +496,33 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Media Session action handlers (lock screen controls)
 		if ('mediaSession' in navigator) {
-			navigator.mediaSession.setActionHandler('play', () => {
-				if (player.audio.paused) this.togglePlayPause();
-			});
-			navigator.mediaSession.setActionHandler('pause', () => {
-				if (!player.audio.paused) this.togglePlayPause();
-			});
-			navigator.mediaSession.setActionHandler('nexttrack', () => {
-				this.nextTrack();
-			});
-			navigator.mediaSession.setActionHandler('previoustrack', () => {
-				this.prevTrack();
-			});
-			navigator.mediaSession.setActionHandler('seekto', (details) => {
-				if (details.seekTime !== undefined && details.seekTime !== null) {
-					player.audio.currentTime = details.seekTime;
-				}
-			});
+			try {
+				navigator.mediaSession.setActionHandler('play', () => {
+					if (player.audio.paused) this.togglePlayPause();
+				});
+			} catch (e) { /* play not supported */ }
+			try {
+				navigator.mediaSession.setActionHandler('pause', () => {
+					if (!player.audio.paused) this.togglePlayPause();
+				});
+			} catch (e) { /* pause not supported */ }
+			try {
+				navigator.mediaSession.setActionHandler('nexttrack', () => {
+					this.nextTrack();
+				});
+			} catch (e) { /* nexttrack not supported */ }
+			try {
+				navigator.mediaSession.setActionHandler('previoustrack', () => {
+					this.prevTrack();
+				});
+			} catch (e) { /* previoustrack not supported */ }
+			try {
+				navigator.mediaSession.setActionHandler('seekto', (details) => {
+					if (details.seekTime !== undefined && details.seekTime !== null) {
+						player.audio.currentTime = details.seekTime;
+					}
+				});
+			} catch (e) { /* seekto not supported */ }
 		}
 	}
 
@@ -815,6 +825,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			return;
 		}
 
+		let nextIndex: number;
 		if (player.shuffleMode) {
 			const unplayed = player.playlist.map((_, i) => i).filter(i => !player.shuffleHistory.includes(i));
 			if (unplayed.length === 0) {
@@ -825,28 +836,47 @@ export default class VectrolaSyncPlugin extends Plugin {
 				// If repeat is off and all played, stop
 				return;
 			}
-			const randomIndex = unplayed[Math.floor(Math.random() * unplayed.length)];
-			this.playTrack(randomIndex);
+			nextIndex = unplayed[Math.floor(Math.random() * unplayed.length)];
 		} else {
-			const nextIndex = (player.currentIndex + 1) % player.playlist.length;
+			nextIndex = (player.currentIndex + 1) % player.playlist.length;
 			if (nextIndex === 0 && player.repeatMode === 'off') {
 				// End of playlist, don't wrap around
 				return;
 			}
-			this.playTrack(nextIndex);
 		}
+
+		// Optimistic UI update - set track info immediately
+		player.currentIndex = nextIndex;
+		player.currentTrack = player.playlist[nextIndex];
+		this.updateFullPlayerUI();
+		const queueList = document.querySelector('.vectrola-queue-list');
+		if (queueList) this.rebuildQueueList(queueList as HTMLElement);
+
+		// Then load and play audio in background
+		this.playTrack(nextIndex);
 	}
 
 	private prevTrack() {
 		const player = window.vectrolaPlayer;
 		if (!player || !player.playlist.length) return;
 
+		let prevIndex: number;
 		if (player.shuffleMode && player.shuffleHistory.length > 1) {
 			player.shuffleHistory.pop();
-			this.playTrack(player.shuffleHistory[player.shuffleHistory.length - 1]);
+			prevIndex = player.shuffleHistory[player.shuffleHistory.length - 1];
 		} else {
-			this.playTrack(player.currentIndex <= 0 ? player.playlist.length - 1 : player.currentIndex - 1);
+			prevIndex = player.currentIndex <= 0 ? player.playlist.length - 1 : player.currentIndex - 1;
 		}
+
+		// Optimistic UI update - set track info immediately
+		player.currentIndex = prevIndex;
+		player.currentTrack = player.playlist[prevIndex];
+		this.updateFullPlayerUI();
+		const queueList = document.querySelector('.vectrola-queue-list');
+		if (queueList) this.rebuildQueueList(queueList as HTMLElement);
+
+		// Then load and play audio in background
+		this.playTrack(prevIndex);
 	}
 
 	private toggleShuffle() {
@@ -1311,11 +1341,11 @@ export default class VectrolaSyncPlugin extends Plugin {
 			(playerBar as HTMLElement).setCssStyles({
 				position: 'fixed',
 				bottom: safeBottom,
-				left: '12px',
-				right: '12px',
+				left: '16px',
+				right: '16px',
 				width: 'auto',
 				background: 'rgba(28, 28, 30, 0.95)',
-				borderRadius: '24px',  // True pill shape (half of ~48px height)
+				borderRadius: '20px',  // Slightly smaller radius for thinner pill
 				boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
 				zIndex: '10',  // Very low so Obsidian side menu overlaps
 				overflow: 'hidden',
@@ -1341,7 +1371,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				height: '2px',  // Thinner progress bar
 				background: 'rgba(255, 255, 255, 0.1)',
 				cursor: 'pointer',
-				borderRadius: '0 0 24px 24px'  // Match bottom corners of pill
+				borderRadius: '0 0 20px 20px'  // Match bottom corners of pill
 			});
 
 			const progressFill = document.createElement("div");
@@ -1350,7 +1380,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				height: '100%',
 				background: '#E53935',
 				width: '0%',
-				borderRadius: '0 0 0 24px',
+				borderRadius: '0 0 0 20px',
 				transition: 'width 0.1s linear'
 			});
 			progressContainer.appendChild(progressFill);
@@ -1372,8 +1402,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 				flexDirection: 'row',
 				alignItems: 'center',
 				gap: '8px',
-				padding: '6px 10px',
-				paddingBottom: '8px'  // Account for progress bar at bottom
+				padding: '4px 8px',
+				paddingBottom: '6px'  // Account for progress bar at bottom
 			});
 
 			// Thumbnail - smaller for compact pill
@@ -1381,9 +1411,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 			thumbnail.id = "vectrola-thumbnail";
 			thumbnail.className = "vectrola-thumbnail";  // Enable CSS animations
 			(thumbnail as HTMLElement).setCssStyles({
-				width: '32px',
-				height: '32px',
-				minWidth: '32px',
+				width: '28px',
+				height: '28px',
+				minWidth: '28px',
 				borderRadius: '6px',
 				overflow: 'hidden',
 				flexShrink: '0',
@@ -1460,9 +1490,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 			const playPauseBtn = document.createElement("button");
 			playPauseBtn.id = "vectrola-playpause-btn";
 			(playPauseBtn as HTMLElement).setCssStyles({
-				width: '36px',
-				height: '36px',
-				minWidth: '36px',
+				width: '32px',
+				height: '32px',
+				minWidth: '32px',
 				border: 'none',
 				background: 'transparent',
 				borderRadius: '50%',
@@ -1483,9 +1513,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 			// Next button - compact
 			const nextBtn = document.createElement("button");
 			(nextBtn as HTMLElement).setCssStyles({
-				width: '36px',
-				height: '36px',
-				minWidth: '36px',
+				width: '32px',
+				height: '32px',
+				minWidth: '32px',
 				border: 'none',
 				background: 'transparent',
 				borderRadius: '50%',
@@ -1544,6 +1574,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 				tapStartX = touch.clientX;
 				tapStartY = touch.clientY;
 				longPressTimer = setTimeout(() => startDrag(), LONG_PRESS_DURATION);
+				// Touch feedback - slight scale down
+				barEl.style.transform = 'scale(0.98)';
+				if (navigator.vibrate) navigator.vibrate(10);
 			}, { passive: true });
 
 			content.addEventListener('touchmove', (e) => {
@@ -1575,6 +1608,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 				if (isDragging) {
 					endDrag();
 				} else {
+					// Reset touch feedback scale
+					barEl.style.transform = 'scale(1)';
+
 					// Don't open full player if tap was on a button (play/pause or next)
 					const target = e.target as HTMLElement;
 					if (target.closest('button')) {
@@ -1598,6 +1634,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 					clearTimeout(longPressTimer);
 					longPressTimer = null;
 				}
+				// Reset touch feedback scale
+				barEl.style.transform = 'scale(1)';
 				endDrag();
 			});
 
@@ -2195,7 +2233,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				textEl.textContent = `${track.title} - ${track.artist}`;
 				(textEl as HTMLElement).setCssStyles({
 					fontSize: '15px',
-					color: isPrevious ? 'rgba(255, 255, 255, 0.5)' : 'rgba(255, 255, 255, 0.9)',
+					color: 'rgba(255, 255, 255, 0.9)',
 					whiteSpace: 'nowrap',
 					overflow: 'hidden',
 					textOverflow: 'ellipsis'
@@ -2651,7 +2689,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				textEl.textContent = `${track.title} - ${track.artist}`;
 				(textEl as HTMLElement).setCssStyles({
 					fontSize: '15px',
-					color: isPrevious ? 'rgba(255, 255, 255, 0.5)' : 'rgba(255, 255, 255, 0.9)',
+					color: 'rgba(255, 255, 255, 0.9)',
 					whiteSpace: 'nowrap',
 					overflow: 'hidden',
 					textOverflow: 'ellipsis'
