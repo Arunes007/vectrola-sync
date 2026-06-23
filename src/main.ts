@@ -716,12 +716,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			this.updateOverlayContent();
 		}
 
-		// Remove highlight from ALL track rows first (clean slate)
-		document.querySelectorAll(".vectrola-track-row.is-playing").forEach(row => {
-			row.classList.remove("is-playing", "audio-playing");
-		});
-
-		// Update all registered highlight updaters (will add is-playing to current track)
+		// Update all registered highlight updaters
 		window.vectrolaHighlightUpdaters?.forEach(fn => fn());
 
 		// Add audio-playing class to current track row for equalizer animation
