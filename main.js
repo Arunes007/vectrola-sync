@@ -2483,11 +2483,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         padding: "0"
       });
       setIconContent(playPauseBtn, (player == null ? void 0 : player.isPlaying) ? "pause" : "play");
-      const ppSvg = playPauseBtn.querySelector("svg");
-      if (ppSvg) {
-        ppSvg.style.width = "22px";
-        ppSvg.style.height = "22px";
-      }
       playPauseBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         this.togglePlayPause();
@@ -2508,11 +2503,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         padding: "0"
       });
       setIconContent(nextBtn, "next");
-      const nextSvg = nextBtn.querySelector("svg");
-      if (nextSvg) {
-        nextSvg.style.width = "22px";
-        nextSvg.style.height = "22px";
-      }
       nextBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         this.nextTrack();
