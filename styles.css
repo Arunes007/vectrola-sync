@@ -764,6 +764,26 @@
 	}
 }
 
+/* =========================================
+   Mobile Thumbnail Animation
+   ========================================= */
+/* Mobile player bar thumbnail - needs position:relative for ::after */
+@media (max-width: 768px) {
+	#vectrola-thumbnail.vectrola-thumbnail {
+		position: relative;
+	}
+
+	#vectrola-thumbnail.vectrola-thumbnail.is-playing::after {
+		content: '';
+		position: absolute;
+		inset: -2px;
+		border: 2px solid #E53935;
+		border-radius: 10px;
+		animation: vectrola-pulse 2s ease-in-out infinite;
+		pointer-events: none;
+	}
+}
+
 
 /* =========================================
    Page Header - Apple Music Style

@@ -1097,11 +1097,27 @@ export default class VectrolaSyncPlugin extends Plugin {
 			img.src = track.artwork_url;
 			img.alt = track.title;
 			img.loading = "lazy";
+			// Apply inline styles for mobile compatibility
+			if (Platform.isMobile) {
+				(img as HTMLElement).setCssStyles({
+					width: '100%',
+					height: '100%',
+					objectFit: 'cover'
+				});
+			}
 			img.onerror = () => {
 				container.replaceChildren();
 				const gradient = document.createElement("div");
 				gradient.className = `vectrola-thumbnail-gradient ${this.getMoodGradient(track.mood)}`;
 				setIconContent(gradient, 'music');
+				if (Platform.isMobile) {
+					const svg = gradient.querySelector('svg');
+					if (svg) {
+						svg.style.width = '18px';
+						svg.style.height = '18px';
+						svg.style.color = 'rgba(255,255,255,0.6)';
+					}
+				}
 				container.appendChild(gradient);
 			};
 			container.appendChild(img);
@@ -1109,6 +1125,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 			const gradient = document.createElement("div");
 			gradient.className = `vectrola-thumbnail-gradient ${this.getMoodGradient(track?.mood)}`;
 			setIconContent(gradient, 'music');
+			if (Platform.isMobile) {
+				const svg = gradient.querySelector('svg');
+				if (svg) {
+					svg.style.width = '18px';
+					svg.style.height = '18px';
+					svg.style.color = 'rgba(255,255,255,0.6)';
+				}
+			}
 			container.appendChild(gradient);
 		}
 
@@ -1251,34 +1275,44 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const pos = this.calculatePlayerPosition();
 
 		if (Platform.isMobile) {
-			// === MOBILE PLAYER BAR - Full inline styles ===
+			// === MOBILE PLAYER BAR - Compact pill design (iOS-style) ===
+			// Use safe area inset for notched devices (iPhone X+)
+			const safeBottom = 'max(20px, env(safe-area-inset-bottom, 20px))';
+
 			(playerBar as HTMLElement).setCssStyles({
 				position: 'fixed',
-				bottom: pos.bottom,
-				left: '8px',
-				right: '8px',
+				bottom: safeBottom,
+				left: '12px',
+				right: '12px',
 				width: 'auto',
 				background: 'rgba(28, 28, 30, 0.95)',
-				borderRadius: '12px',
+				borderRadius: '28px',  // True pill shape (half of ~56px height)
 				boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
 				zIndex: '1000',
-				overflow: 'hidden'
+				overflow: 'hidden',
+				transition: 'transform 0.2s ease, box-shadow 0.2s ease'  // Smooth transitions
 			});
 			// Set backdrop filter directly on style (TypeScript doesn't know it)
 			playerBar.style.setProperty('backdrop-filter', 'blur(20px)');
 			playerBar.style.setProperty('-webkit-backdrop-filter', 'blur(20px)');
+			// Prevent text selection on long press
+			playerBar.style.setProperty('-webkit-user-select', 'none');
+			playerBar.style.setProperty('user-select', 'none');
+			// Touch action for better gesture handling
+			playerBar.style.setProperty('touch-action', 'manipulation');
 
-			// Progress bar at TOP
+			// Progress bar at BOTTOM (inside pill)
 			const progressContainer = document.createElement("div");
 			progressContainer.id = "vectrola-progress-bar";
 			(progressContainer as HTMLElement).setCssStyles({
 				position: 'absolute',
-				top: '0',
+				bottom: '0',
 				left: '0',
 				right: '0',
 				height: '3px',
 				background: 'rgba(255, 255, 255, 0.1)',
-				cursor: 'pointer'
+				cursor: 'pointer',
+				borderRadius: '0 0 28px 28px'  // Match bottom corners of pill
 			});
 
 			const progressFill = document.createElement("div");
@@ -1287,7 +1321,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				height: '100%',
 				background: '#E53935',
 				width: '0%',
-				borderRadius: '0 2px 2px 0',
+				borderRadius: '0 0 0 28px',
 				transition: 'width 0.1s linear'
 			});
 			progressContainer.appendChild(progressFill);
@@ -1302,31 +1336,33 @@ export default class VectrolaSyncPlugin extends Plugin {
 				}
 			});
 
-			// Content row
+			// Content row - compact layout
 			const content = document.createElement("div");
 			(content as HTMLElement).setCssStyles({
 				display: 'flex',
 				flexDirection: 'row',
 				alignItems: 'center',
-				gap: '12px',
-				padding: '10px 12px',
-				paddingTop: '13px' // Account for progress bar
+				gap: '10px',
+				padding: '8px 14px',
+				paddingBottom: '11px'  // Account for progress bar at bottom
 			});
 
-			// Thumbnail
+			// Thumbnail - compact size
 			const thumbnail = document.createElement("div");
 			thumbnail.id = "vectrola-thumbnail";
+			thumbnail.className = "vectrola-thumbnail";  // Enable CSS animations
 			(thumbnail as HTMLElement).setCssStyles({
-				width: '44px',
-				height: '44px',
-				minWidth: '44px',
-				borderRadius: '6px',
+				width: '40px',
+				height: '40px',
+				minWidth: '40px',
+				borderRadius: '8px',
 				overflow: 'hidden',
 				flexShrink: '0',
 				display: 'flex',
 				alignItems: 'center',
 				justifyContent: 'center',
-				background: 'linear-gradient(135deg, #2d3436 0%, #636e72 100%)'
+				background: 'linear-gradient(135deg, #2d3436 0%, #636e72 100%)',
+				position: 'relative'  // For ::after pseudo-element animation
 			});
 			if (player.currentTrack?.artwork_url) {
 				const img = document.createElement("img");
@@ -1391,13 +1427,13 @@ export default class VectrolaSyncPlugin extends Plugin {
 				flexShrink: '0'
 			});
 
-			// Play/Pause button
+			// Play/Pause button - compact
 			const playPauseBtn = document.createElement("button");
 			playPauseBtn.id = "vectrola-playpause-btn";
 			(playPauseBtn as HTMLElement).setCssStyles({
-				width: '44px',
-				height: '44px',
-				minWidth: '44px',
+				width: '36px',
+				height: '36px',
+				minWidth: '36px',
 				border: 'none',
 				background: 'transparent',
 				borderRadius: '50%',
@@ -1411,20 +1447,20 @@ export default class VectrolaSyncPlugin extends Plugin {
 			setIconContent(playPauseBtn, player?.isPlaying ? "pause" : "play");
 			const ppSvg = playPauseBtn.querySelector('svg');
 			if (ppSvg) {
-				ppSvg.style.width = '24px';
-				ppSvg.style.height = '24px';
+				ppSvg.style.width = '22px';
+				ppSvg.style.height = '22px';
 			}
 			playPauseBtn.addEventListener("click", (e) => {
 				e.stopPropagation();
 				this.togglePlayPause();
 			});
 
-			// Next button
+			// Next button - compact
 			const nextBtn = document.createElement("button");
 			(nextBtn as HTMLElement).setCssStyles({
-				width: '44px',
-				height: '44px',
-				minWidth: '44px',
+				width: '36px',
+				height: '36px',
+				minWidth: '36px',
 				border: 'none',
 				background: 'transparent',
 				borderRadius: '50%',
@@ -1438,8 +1474,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 			setIconContent(nextBtn, "next");
 			const nextSvg = nextBtn.querySelector('svg');
 			if (nextSvg) {
-				nextSvg.style.width = '24px';
-				nextSvg.style.height = '24px';
+				nextSvg.style.width = '22px';
+				nextSvg.style.height = '22px';
 			}
 			nextBtn.addEventListener("click", (e) => {
 				e.stopPropagation();
@@ -1449,8 +1485,98 @@ export default class VectrolaSyncPlugin extends Plugin {
 			miniControls.append(playPauseBtn, nextBtn);
 			content.append(thumbnail, trackInfo, miniControls);
 
-			// Tap on content opens full player
-			content.addEventListener("click", () => this.showFullPlayer());
+			// Tap on content opens full player (short tap only)
+			let tapStartTime = 0;
+			let tapStartX = 0;
+			let tapStartY = 0;
+			let isDragging = false;
+			let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+			const LONG_PRESS_DURATION = 300;
+			const TAP_MOVE_THRESHOLD = 10;
+			const barEl = playerBar;  // Capture reference for closures
+
+			const startDrag = () => {
+				isDragging = true;
+				barEl.style.transition = 'none';
+				barEl.style.transform = 'scale(1.03)';
+				barEl.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.5)';
+				// Haptic feedback if available
+				if (navigator.vibrate) navigator.vibrate(10);
+			};
+
+			const endDrag = () => {
+				if (isDragging) {
+					isDragging = false;
+					barEl.style.transition = 'transform 0.2s ease, box-shadow 0.2s ease, bottom 0.2s ease';
+					barEl.style.transform = 'scale(1)';
+					barEl.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.4)';
+					// Snap to safe bottom position if dragged too low
+					const currentBottom = parseInt(barEl.style.bottom) || 20;
+					if (currentBottom < 20) {
+						barEl.style.bottom = '20px';
+					}
+				}
+			};
+
+			content.addEventListener('touchstart', (e) => {
+				const touch = e.touches[0];
+				tapStartTime = Date.now();
+				tapStartX = touch.clientX;
+				tapStartY = touch.clientY;
+				longPressTimer = setTimeout(() => startDrag(), LONG_PRESS_DURATION);
+			}, { passive: true });
+
+			content.addEventListener('touchmove', (e) => {
+				const touch = e.touches[0];
+				const deltaX = Math.abs(touch.clientX - tapStartX);
+				const deltaY = Math.abs(touch.clientY - tapStartY);
+
+				// Cancel long press if moved before timer
+				if (longPressTimer && (deltaX > TAP_MOVE_THRESHOLD || deltaY > TAP_MOVE_THRESHOLD)) {
+					clearTimeout(longPressTimer);
+					longPressTimer = null;
+				}
+
+				// If dragging, move the bar
+				if (isDragging) {
+					e.preventDefault();
+					const newBottom = window.innerHeight - touch.clientY - 28; // Center on finger
+					const clampedBottom = Math.max(20, Math.min(newBottom, window.innerHeight - 100));
+					barEl.style.bottom = `${clampedBottom}px`;
+				}
+			}, { passive: false });
+
+			content.addEventListener('touchend', (e) => {
+				if (longPressTimer) {
+					clearTimeout(longPressTimer);
+					longPressTimer = null;
+				}
+
+				if (isDragging) {
+					endDrag();
+				} else {
+					// Check if it was a tap (short duration, minimal movement)
+					const touch = e.changedTouches[0];
+					const deltaX = Math.abs(touch.clientX - tapStartX);
+					const deltaY = Math.abs(touch.clientY - tapStartY);
+					const duration = Date.now() - tapStartTime;
+
+					if (duration < 300 && deltaX < TAP_MOVE_THRESHOLD && deltaY < TAP_MOVE_THRESHOLD) {
+						this.showFullPlayer();
+					}
+				}
+			});
+
+			content.addEventListener('touchcancel', () => {
+				if (longPressTimer) {
+					clearTimeout(longPressTimer);
+					longPressTimer = null;
+				}
+				endDrag();
+			});
+
+			// Remove the simple click handler (replaced by touch handling above)
+			// content.addEventListener("click", () => this.showFullPlayer());
 
 			// Assemble
 			playerBar.append(progressContainer, content);
@@ -1696,12 +1822,17 @@ export default class VectrolaSyncPlugin extends Plugin {
 			borderRadius: '20px 20px 0 0',
 			display: 'flex',
 			flexDirection: 'column',
-			padding: '0 20px 40px',
+			padding: '0 20px calc(40px + env(safe-area-inset-bottom, 0px))',  // Safe area for home indicator
 			overflowY: 'auto',
 			transform: 'translateY(100%)',
-			transition: 'transform 0.3s ease'
+			transition: 'transform 0.3s ease',
+			overscrollBehavior: 'contain'  // Prevent scroll chaining
 		});
 		fullPlayer.style.setProperty('backdrop-filter', 'blur(30px)');
+		fullPlayer.style.setProperty('-webkit-backdrop-filter', 'blur(30px)');
+		// Prevent text selection
+		fullPlayer.style.setProperty('-webkit-user-select', 'none');
+		fullPlayer.style.setProperty('user-select', 'none');
 		fullPlayer.style.setProperty('-webkit-backdrop-filter', 'blur(30px)');
 
 		// Drag handle
@@ -1936,18 +2067,16 @@ export default class VectrolaSyncPlugin extends Plugin {
 			padding: '0 20px'
 		});
 
-		// Show next few tracks in queue
-		const startIdx = Math.max(0, player.currentIndex);
-		const queueTracks = player.playlist.slice(startIdx, startIdx + 5);
-		queueTracks.forEach((track, i) => {
+		// Helper to create queue item
+		const createQueueItem = (track: TrackInfo, trackIdx: number, isCurrent: boolean, isPrevious: boolean) => {
 			const item = document.createElement("div");
-			const isCurrent = i === 0 && player.currentIndex >= 0;
 			(item as HTMLElement).setCssStyles({
 				display: 'flex',
 				alignItems: 'center',
 				gap: '12px',
 				padding: '10px 0',
-				cursor: 'pointer'
+				cursor: 'pointer',
+				opacity: isPrevious ? '0.5' : '1'  // Muted style for previous tracks
 			});
 
 			const itemArt = document.createElement("div");
@@ -1981,17 +2110,62 @@ export default class VectrolaSyncPlugin extends Plugin {
 				}
 			}
 
+			// Track info with title and artist on separate lines for current
 			const itemInfo = document.createElement("div");
-			itemInfo.textContent = `${track.title} - ${track.artist}`;
 			(itemInfo as HTMLElement).setCssStyles({
 				flex: '1',
 				minWidth: '0',
-				fontSize: '15px',
-				color: isCurrent ? '#E53935' : 'rgba(255, 255, 255, 0.9)',
-				whiteSpace: 'nowrap',
-				overflow: 'hidden',
-				textOverflow: 'ellipsis'
+				overflow: 'hidden'
 			});
+
+			if (isCurrent) {
+				// Current track: show "Now Playing" indicator + title + artist
+				const nowPlaying = document.createElement("div");
+				nowPlaying.textContent = "▶ Now Playing";
+				(nowPlaying as HTMLElement).setCssStyles({
+					fontSize: '11px',
+					fontWeight: '600',
+					color: '#E53935',
+					marginBottom: '2px',
+					textTransform: 'uppercase',
+					letterSpacing: '0.5px'
+				});
+
+				const titleEl = document.createElement("div");
+				titleEl.textContent = track.title;
+				(titleEl as HTMLElement).setCssStyles({
+					fontSize: '15px',
+					fontWeight: '600',
+					color: '#E53935',
+					whiteSpace: 'nowrap',
+					overflow: 'hidden',
+					textOverflow: 'ellipsis'
+				});
+
+				const artistEl = document.createElement("div");
+				artistEl.textContent = track.artist;
+				(artistEl as HTMLElement).setCssStyles({
+					fontSize: '13px',
+					color: 'rgba(255, 255, 255, 0.6)',
+					whiteSpace: 'nowrap',
+					overflow: 'hidden',
+					textOverflow: 'ellipsis'
+				});
+
+				itemInfo.append(nowPlaying, titleEl, artistEl);
+			} else {
+				// Other tracks: single line
+				const textEl = document.createElement("div");
+				textEl.textContent = `${track.title} - ${track.artist}`;
+				(textEl as HTMLElement).setCssStyles({
+					fontSize: '15px',
+					color: isPrevious ? 'rgba(255, 255, 255, 0.5)' : 'rgba(255, 255, 255, 0.9)',
+					whiteSpace: 'nowrap',
+					overflow: 'hidden',
+					textOverflow: 'ellipsis'
+				});
+				itemInfo.appendChild(textEl);
+			}
 
 			const dragIcon = document.createElement("div");
 			(dragIcon as HTMLElement).setCssStyles({
@@ -2010,12 +2184,47 @@ export default class VectrolaSyncPlugin extends Plugin {
 			}
 
 			item.append(itemArt, itemInfo, dragIcon);
+
+			// Click behavior: current = toggle play/pause, other = play track
 			item.addEventListener("click", () => {
-				this.playTrack(startIdx + i);
-				this.hideFullPlayer();
+				if (isCurrent) {
+					// Toggle play/pause for current track
+					this.togglePlayPause();
+				} else {
+					// Play the selected track (don't auto-close modal)
+					this.playTrack(trackIdx);
+					// Update the queue UI to reflect new current track
+					this.updateFullPlayerUI();
+					// Rebuild queue to show new current
+					this.rebuildQueueList(queueList);
+				}
 			});
-			queueList.appendChild(item);
-		});
+
+			return item;
+		};
+
+		// Build queue: previous tracks + current + next tracks
+		const prevCount = Math.min(2, player.currentIndex);
+		const nextCount = 4;
+
+		// Previous tracks (muted)
+		for (let i = player.currentIndex - prevCount; i < player.currentIndex; i++) {
+			if (i >= 0 && player.playlist[i]) {
+				queueList.appendChild(createQueueItem(player.playlist[i], i, false, true));
+			}
+		}
+
+		// Current track (highlighted)
+		if (player.currentIndex >= 0 && player.playlist[player.currentIndex]) {
+			queueList.appendChild(createQueueItem(player.playlist[player.currentIndex], player.currentIndex, true, false));
+		}
+
+		// Next tracks
+		for (let i = player.currentIndex + 1; i <= player.currentIndex + nextCount; i++) {
+			if (player.playlist[i]) {
+				queueList.appendChild(createQueueItem(player.playlist[i], i, false, false));
+			}
+		}
 
 		queueSection.append(queueHeader, queueList);
 
@@ -2206,6 +2415,79 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		document.body.append(backdrop, fullPlayer);
 
+		// Swipe-down to dismiss gesture
+		let gestureStartY = 0;
+		let currentTranslateY = 0;
+		let gestureStartTime = 0;
+		let isGesturing = false;
+
+		fullPlayer.addEventListener('touchstart', (e) => {
+			// Only start gesture from top area (drag handle region) or if scrolled to top
+			const touchY = e.touches[0].clientY;
+			const rect = fullPlayer.getBoundingClientRect();
+			const isNearTop = touchY - rect.top < 100;
+			const isScrolledToTop = fullPlayer.scrollTop <= 0;
+
+			if (isNearTop || isScrolledToTop) {
+				gestureStartY = e.touches[0].clientY;
+				gestureStartTime = Date.now();
+				currentTranslateY = 0;
+				isGesturing = true;
+			}
+		}, { passive: true });
+
+		fullPlayer.addEventListener('touchmove', (e) => {
+			if (!isGesturing) return;
+
+			const deltaY = e.touches[0].clientY - gestureStartY;
+
+			if (deltaY > 0) {
+				// Swiping down - follow finger
+				currentTranslateY = deltaY;
+				fullPlayer.style.transition = 'none';
+				fullPlayer.style.transform = `translateY(${deltaY}px)`;
+				// Fade backdrop proportionally
+				const opacity = Math.max(0, 1 - (deltaY / 400));
+				backdrop.style.transition = 'none';
+				backdrop.style.opacity = String(opacity);
+				// Prevent scroll while gesturing
+				if (deltaY > 10) e.preventDefault();
+			} else if (deltaY < 0) {
+				// Swiping up - rubber band effect (reduced movement)
+				currentTranslateY = deltaY * 0.15;
+				fullPlayer.style.transition = 'none';
+				fullPlayer.style.transform = `translateY(${deltaY * 0.15}px)`;
+			}
+		}, { passive: false });
+
+		fullPlayer.addEventListener('touchend', () => {
+			if (!isGesturing) return;
+			isGesturing = false;
+
+			const velocity = currentTranslateY / Math.max(1, Date.now() - gestureStartTime);
+
+			fullPlayer.style.transition = 'transform 0.3s ease';
+			backdrop.style.transition = 'opacity 0.3s ease';
+
+			// Dismiss if dragged far enough OR fast enough
+			if (currentTranslateY > 150 || velocity > 0.5) {
+				this.hideFullPlayer();
+			} else {
+				// Snap back to open position
+				fullPlayer.style.transform = 'translateY(0)';
+				backdrop.style.opacity = '1';
+			}
+		});
+
+		fullPlayer.addEventListener('touchcancel', () => {
+			if (!isGesturing) return;
+			isGesturing = false;
+			fullPlayer.style.transition = 'transform 0.3s ease';
+			backdrop.style.transition = 'opacity 0.3s ease';
+			fullPlayer.style.transform = 'translateY(0)';
+			backdrop.style.opacity = '1';
+		});
+
 		// Animate in
 		requestAnimationFrame(() => {
 			(backdrop as HTMLElement).setCssStyles({ opacity: '1' });
@@ -2231,6 +2513,163 @@ export default class VectrolaSyncPlugin extends Plugin {
 			backdrop?.remove();
 			fullPlayer?.remove();
 		}, 300);
+	}
+
+	// Rebuild queue list after track change (without closing modal)
+	private rebuildQueueList(queueList: HTMLElement) {
+		const player = window.vectrolaPlayer;
+		if (!player) return;
+
+		// Clear existing items
+		queueList.replaceChildren();
+
+		// Helper to create queue item (same as in showFullPlayer)
+		const createQueueItem = (track: TrackInfo, trackIdx: number, isCurrent: boolean, isPrevious: boolean) => {
+			const item = document.createElement("div");
+			(item as HTMLElement).setCssStyles({
+				display: 'flex',
+				alignItems: 'center',
+				gap: '12px',
+				padding: '10px 0',
+				cursor: 'pointer',
+				opacity: isPrevious ? '0.5' : '1'
+			});
+
+			const itemArt = document.createElement("div");
+			(itemArt as HTMLElement).setCssStyles({
+				width: '48px',
+				height: '48px',
+				minWidth: '48px',
+				borderRadius: '6px',
+				overflow: 'hidden',
+				display: 'flex',
+				alignItems: 'center',
+				justifyContent: 'center',
+				background: 'linear-gradient(135deg, #2d3436 0%, #636e72 100%)'
+			});
+			if (track.artwork_url) {
+				const img = document.createElement("img");
+				img.src = track.artwork_url;
+				(img as HTMLElement).setCssStyles({
+					width: '100%',
+					height: '100%',
+					objectFit: 'cover'
+				});
+				itemArt.appendChild(img);
+			} else {
+				setIconContent(itemArt, 'music');
+				const svg = itemArt.querySelector('svg');
+				if (svg) {
+					svg.style.width = '20px';
+					svg.style.height = '20px';
+					svg.style.color = 'rgba(255,255,255,0.5)';
+				}
+			}
+
+			const itemInfo = document.createElement("div");
+			(itemInfo as HTMLElement).setCssStyles({
+				flex: '1',
+				minWidth: '0',
+				overflow: 'hidden'
+			});
+
+			if (isCurrent) {
+				const nowPlaying = document.createElement("div");
+				nowPlaying.textContent = "▶ Now Playing";
+				(nowPlaying as HTMLElement).setCssStyles({
+					fontSize: '11px',
+					fontWeight: '600',
+					color: '#E53935',
+					marginBottom: '2px',
+					textTransform: 'uppercase',
+					letterSpacing: '0.5px'
+				});
+
+				const titleEl = document.createElement("div");
+				titleEl.textContent = track.title;
+				(titleEl as HTMLElement).setCssStyles({
+					fontSize: '15px',
+					fontWeight: '600',
+					color: '#E53935',
+					whiteSpace: 'nowrap',
+					overflow: 'hidden',
+					textOverflow: 'ellipsis'
+				});
+
+				const artistEl = document.createElement("div");
+				artistEl.textContent = track.artist;
+				(artistEl as HTMLElement).setCssStyles({
+					fontSize: '13px',
+					color: 'rgba(255, 255, 255, 0.6)',
+					whiteSpace: 'nowrap',
+					overflow: 'hidden',
+					textOverflow: 'ellipsis'
+				});
+
+				itemInfo.append(nowPlaying, titleEl, artistEl);
+			} else {
+				const textEl = document.createElement("div");
+				textEl.textContent = `${track.title} - ${track.artist}`;
+				(textEl as HTMLElement).setCssStyles({
+					fontSize: '15px',
+					color: isPrevious ? 'rgba(255, 255, 255, 0.5)' : 'rgba(255, 255, 255, 0.9)',
+					whiteSpace: 'nowrap',
+					overflow: 'hidden',
+					textOverflow: 'ellipsis'
+				});
+				itemInfo.appendChild(textEl);
+			}
+
+			const dragIcon = document.createElement("div");
+			(dragIcon as HTMLElement).setCssStyles({
+				width: '24px',
+				height: '24px',
+				color: 'rgba(255, 255, 255, 0.3)',
+				display: 'flex',
+				alignItems: 'center',
+				justifyContent: 'center'
+			});
+			setIconContent(dragIcon, 'queue');
+			const dragSvg = dragIcon.querySelector('svg');
+			if (dragSvg) {
+				dragSvg.style.width = '18px';
+				dragSvg.style.height = '18px';
+			}
+
+			item.append(itemArt, itemInfo, dragIcon);
+
+			item.addEventListener("click", () => {
+				if (isCurrent) {
+					this.togglePlayPause();
+				} else {
+					this.playTrack(trackIdx);
+					this.updateFullPlayerUI();
+					this.rebuildQueueList(queueList);
+				}
+			});
+
+			return item;
+		};
+
+		// Build queue: previous + current + next
+		const prevCount = Math.min(2, player.currentIndex);
+		const nextCount = 4;
+
+		for (let i = player.currentIndex - prevCount; i < player.currentIndex; i++) {
+			if (i >= 0 && player.playlist[i]) {
+				queueList.appendChild(createQueueItem(player.playlist[i], i, false, true));
+			}
+		}
+
+		if (player.currentIndex >= 0 && player.playlist[player.currentIndex]) {
+			queueList.appendChild(createQueueItem(player.playlist[player.currentIndex], player.currentIndex, true, false));
+		}
+
+		for (let i = player.currentIndex + 1; i <= player.currentIndex + nextCount; i++) {
+			if (player.playlist[i]) {
+				queueList.appendChild(createQueueItem(player.playlist[i], i, false, false));
+			}
+		}
 	}
 
 	private updateFullPlayerUI() {
