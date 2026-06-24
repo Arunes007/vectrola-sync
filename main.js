@@ -1313,6 +1313,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
   }
   async onload() {
     var _a, _b, _c;
+    console.log("[onload] Plugin loading...");
     await this.loadSettings();
     document.querySelectorAll(".is-playing").forEach((el) => {
       el.classList.remove("is-playing");

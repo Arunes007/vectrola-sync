@@ -41,6 +41,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 	private sync!: SyncEngine;
 
 	async onload() {
+		console.log('[onload] Plugin loading...');
 		await this.loadSettings();
 
 		// CRITICAL: Clear any lingering animation states from previous session
