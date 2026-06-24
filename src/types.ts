@@ -71,6 +71,7 @@ export interface VectrolaPlayerState {
 	ui: Record<string, HTMLElement> | null;
 	overlayVisible: boolean;
 	volume: number;
+	endingHandled?: boolean;
 }
 
 // Public API interface for DataviewJS

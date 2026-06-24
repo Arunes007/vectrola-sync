@@ -227,6 +227,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 					ui: null,
 					overlayVisible: false,
 					volume: 1,
+					endingHandled: false,
 				};
 				window.vectrolaPlayer.audio.preload = "none";
 
@@ -464,12 +465,19 @@ export default class VectrolaSyncPlugin extends Plugin {
 				ct.textContent = this.formatTime(player.audio.currentTime);
 			}
 			// Update Media Session position state for lock screen progress bar
-			if ('mediaSession' in navigator && player.audio.duration) {
-				navigator.mediaSession.setPositionState({
-					duration: player.audio.duration,
-					playbackRate: player.audio.playbackRate,
-					position: player.audio.currentTime
-				});
+			if ('mediaSession' in navigator &&
+				player.audio.duration &&
+				!isNaN(player.audio.duration) &&
+				!isNaN(player.audio.currentTime)) {
+				try {
+					navigator.mediaSession.setPositionState({
+						duration: player.audio.duration,
+						playbackRate: player.audio.playbackRate,
+						position: Math.min(player.audio.currentTime, player.audio.duration)
+					});
+				} catch (e) {
+					// Ignore - some browsers don't support setPositionState
+				}
 			}
 		});
 
@@ -479,6 +487,38 @@ export default class VectrolaSyncPlugin extends Plugin {
 		});
 
 		player.audio.addEventListener("ended", () => this.nextTrack());
+
+		// iOS workaround: detect end of track via timeupdate when ended event doesn't fire
+		// No setTimeout - iOS throttles/freezes timers when backgrounded
+		player.audio.addEventListener("timeupdate", () => {
+			if (player.audio.duration &&
+				!player.audio.paused &&
+				!player.endingHandled &&
+				player.audio.currentTime >= player.audio.duration - 0.5) {
+				player.endingHandled = true;
+				this.nextTrack();
+			}
+		});
+
+		// If the user manually seeks backward, unlock the watchdog flag
+		player.audio.addEventListener("seeking", () => {
+			if (player.audio.duration && player.audio.currentTime < player.audio.duration - 0.5) {
+				player.endingHandled = false;
+			}
+		});
+
+		// Sync MediaSession playback state with actual audio state
+		player.audio.addEventListener("play", () => {
+			if ('mediaSession' in navigator) {
+				navigator.mediaSession.playbackState = 'playing';
+			}
+		});
+
+		player.audio.addEventListener("pause", () => {
+			if ('mediaSession' in navigator) {
+				navigator.mediaSession.playbackState = 'paused';
+			}
+		});
 
 		// Save position to localStorage on pause
 		player.audio.addEventListener("pause", () => {
@@ -523,6 +563,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 					}
 				});
 			} catch (e) { /* seekto not supported */ }
+			// Explicitly unregister seek handlers to force iOS to show track skip buttons (⏮ ⏭)
+			// iOS prioritizes seek handlers - by setting them to null, we force track navigation UI
+			try { navigator.mediaSession.setActionHandler('seekbackward', null); } catch (e) {}
+			try { navigator.mediaSession.setActionHandler('seekforward', null); } catch (e) {}
 		}
 	}
 
@@ -536,6 +580,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 	private async playTrack(index: number) {
 		const player = window.vectrolaPlayer;
 		if (!player || index < 0 || index >= player.playlist.length) return;
+
+		// Reset iOS watchdog flag for new track
+		player.endingHandled = false;
 
 		const track = player.playlist[index];
 		const sources = track.sources || { local: {}, cloud: {} };

@@ -1455,7 +1455,8 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
           playlistSource: null,
           ui: null,
           overlayVisible: false,
-          volume: 1
+          volume: 1,
+          endingHandled: false
         };
         window.vectrolaPlayer.audio.preload = "none";
         const saved = localStorage.getItem("vectrola-last-track");
@@ -1627,12 +1628,15 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         pf.setCssStyles({ width: player.audio.currentTime / player.audio.duration * 100 + "%" });
         ct.textContent = this.formatTime(player.audio.currentTime);
       }
-      if ("mediaSession" in navigator && player.audio.duration) {
-        navigator.mediaSession.setPositionState({
-          duration: player.audio.duration,
-          playbackRate: player.audio.playbackRate,
-          position: player.audio.currentTime
-        });
+      if ("mediaSession" in navigator && player.audio.duration && !isNaN(player.audio.duration) && !isNaN(player.audio.currentTime)) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: player.audio.duration,
+            playbackRate: player.audio.playbackRate,
+            position: Math.min(player.audio.currentTime, player.audio.duration)
+          });
+        } catch (e) {
+        }
       }
     });
     player.audio.addEventListener("loadedmetadata", () => {
@@ -1641,6 +1645,27 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         tt.textContent = this.formatTime(player.audio.duration);
     });
     player.audio.addEventListener("ended", () => this.nextTrack());
+    player.audio.addEventListener("timeupdate", () => {
+      if (player.audio.duration && !player.audio.paused && !player.endingHandled && player.audio.currentTime >= player.audio.duration - 0.5) {
+        player.endingHandled = true;
+        this.nextTrack();
+      }
+    });
+    player.audio.addEventListener("seeking", () => {
+      if (player.audio.duration && player.audio.currentTime < player.audio.duration - 0.5) {
+        player.endingHandled = false;
+      }
+    });
+    player.audio.addEventListener("play", () => {
+      if ("mediaSession" in navigator) {
+        navigator.mediaSession.playbackState = "playing";
+      }
+    });
+    player.audio.addEventListener("pause", () => {
+      if ("mediaSession" in navigator) {
+        navigator.mediaSession.playbackState = "paused";
+      }
+    });
     player.audio.addEventListener("pause", () => {
       const saved = localStorage.getItem("vectrola-last-track");
       if (saved && player.currentTrack) {
@@ -1687,6 +1712,14 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         });
       } catch (e) {
       }
+      try {
+        navigator.mediaSession.setActionHandler("seekbackward", null);
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("seekforward", null);
+      } catch (e) {
+      }
     }
   }
   formatTime(seconds) {
@@ -1701,6 +1734,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     const player = window.vectrolaPlayer;
     if (!player || index < 0 || index >= player.playlist.length)
       return;
+    player.endingHandled = false;
     const track = player.playlist[index];
     const sources = track.sources || { local: {}, cloud: {} };
     let audioLoaded = false;
