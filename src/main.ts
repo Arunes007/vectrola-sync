@@ -503,6 +503,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const player = window.vectrolaPlayer;
 		if (!player) return;
 
+		console.log('[setupAudioEventListeners] Called, mediaSession available:', 'mediaSession' in navigator);
+
 		// UI progress updates only (setPositionState removed to prevent continuous flooding)
 		player.audio.addEventListener("timeupdate", () => {
 			const pf = document.getElementById("vectrola-progress-fill");

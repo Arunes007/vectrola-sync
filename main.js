@@ -1661,6 +1661,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     const player = window.vectrolaPlayer;
     if (!player)
       return;
+    console.log("[setupAudioEventListeners] Called, mediaSession available:", "mediaSession" in navigator);
     player.audio.addEventListener("timeupdate", () => {
       const pf = document.getElementById("vectrola-progress-fill");
       const ct = document.getElementById("vectrola-current-time");
