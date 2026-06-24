@@ -1313,7 +1313,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
   }
   async onload() {
     var _a, _b, _c;
-    console.log("[onload] Plugin loading...");
     await this.loadSettings();
     document.querySelectorAll(".is-playing").forEach((el) => {
       el.classList.remove("is-playing");
@@ -1408,12 +1407,10 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     }
     this.setupSyncInterval();
     this.app.workspace.onLayoutReady(() => {
-      console.log("[onLayoutReady] Triggering re-render of active markdown views");
       setTimeout(() => {
         if (!window.vectrolaPlayer) {
           const saved = localStorage.getItem("vectrola-last-track");
           if (saved) {
-            console.log("[onLayoutReady] Creating player from localStorage");
             try {
               const data = JSON.parse(saved);
               window.vectrolaPlayer = {
@@ -1433,12 +1430,10 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
               };
               window.vectrolaPlayer.audio.preload = "none";
             } catch (e) {
-              console.warn("[onLayoutReady] Failed to restore player:", e);
             }
           }
         }
         if (window.vectrolaPlayer) {
-          console.log("[onLayoutReady] Registering MediaSession handlers");
           this.setupAudioEventListeners();
         }
         this.app.workspace.iterateAllLeaves((leaf) => {
@@ -1446,7 +1441,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
           if (leaf.view.getViewType() === "markdown") {
             const view = leaf.view;
             if ((_a2 = view.previewMode) == null ? void 0 : _a2.rerender) {
-              console.log("[onLayoutReady] Re-rendering view:", leaf.getDisplayText());
               view.previewMode.rerender(true);
             }
           }
@@ -1481,7 +1475,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
   // =========================================================================
   renderVectrolaPlayer(source, container) {
     var _a, _b;
-    console.log("[renderVectrolaPlayer] Called for page");
     try {
       const config = JSON.parse(source);
       const playlist = config.playlist || [];
@@ -1587,16 +1580,10 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       const trackListEl = container.createEl("div");
       trackListEl.className = "vectrola-track-list";
       const updateLocalHighlight = () => {
-        var _a2;
-        console.log("[updateLocalHighlight] Running, trackListEl in document:", document.contains(trackListEl), "currentTrack:", (_a2 = player.currentTrack) == null ? void 0 : _a2.title);
         const rows = trackListEl.querySelectorAll(".vectrola-track-row");
-        console.log("[updateLocalHighlight] Rows found:", rows.length);
         rows.forEach((row, i) => {
           const track = playlist[i];
           const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
-          if (isCurrentTrack) {
-            console.log("[updateLocalHighlight] Found match at index", i, "track:", track.title);
-          }
           row.classList.toggle("is-playing", !!isCurrentTrack);
           row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
         });
@@ -1649,7 +1636,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         window.vectrolaHighlightUpdaters = /* @__PURE__ */ new Set();
       }
       window.vectrolaHighlightUpdaters.add(updateLocalHighlight);
-      console.log("[Highlight] Registered updater, total:", window.vectrolaHighlightUpdaters.size);
       const resizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const width = entry.contentRect.width;
@@ -1660,10 +1646,9 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       });
       resizeObserver.observe(container);
       const observer = new MutationObserver(() => {
-        var _a2, _b2;
+        var _a2;
         if (!document.contains(trackListEl)) {
-          console.log("[Highlight] Deleting updater - trackListEl removed from document, remaining:", (((_a2 = window.vectrolaHighlightUpdaters) == null ? void 0 : _a2.size) || 1) - 1);
-          (_b2 = window.vectrolaHighlightUpdaters) == null ? void 0 : _b2.delete(updateLocalHighlight);
+          (_a2 = window.vectrolaHighlightUpdaters) == null ? void 0 : _a2.delete(updateLocalHighlight);
           resizeObserver.disconnect();
           observer.disconnect();
         }
@@ -1693,7 +1678,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     const player = window.vectrolaPlayer;
     if (!player)
       return;
-    console.log("[setupAudioEventListeners] Called, mediaSession available:", "mediaSession" in navigator);
     player.audio.addEventListener("timeupdate", () => {
       const pf = document.getElementById("vectrola-progress-fill");
       const ct = document.getElementById("vectrola-current-time");
@@ -1707,10 +1691,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       if (tt)
         tt.textContent = this.formatTime(player.audio.duration);
       player.endingHandled = false;
-      console.log("[MediaSession] loadedmetadata - updating position state", {
-        duration: player.audio.duration,
-        currentTime: player.audio.currentTime
-      });
       this.updatePositionState();
     });
     player.audio.addEventListener("seeked", () => {
@@ -1757,60 +1737,40 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       }
     });
     if ("mediaSession" in navigator) {
-      console.log("[MediaSession] Registering action handlers...");
       try {
         navigator.mediaSession.setActionHandler("play", () => {
-          console.log("[MediaSession] play handler called");
           if (player.audio.paused)
             this.togglePlayPause();
         });
-        console.log("[MediaSession] play handler registered");
       } catch (e) {
-        console.error("[MediaSession] play not supported:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("pause", () => {
-          console.log("[MediaSession] pause handler called");
           if (!player.audio.paused)
             this.togglePlayPause();
         });
-        console.log("[MediaSession] pause handler registered");
       } catch (e) {
-        console.error("[MediaSession] pause not supported:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("nexttrack", () => {
-          console.log("[MediaSession] nexttrack handler called");
           this.nextTrack();
         });
-        console.log("[MediaSession] nexttrack handler registered");
       } catch (e) {
-        console.error("[MediaSession] nexttrack not supported:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("previoustrack", () => {
-          console.log("[MediaSession] previoustrack handler called");
           this.prevTrack();
         });
-        console.log("[MediaSession] previoustrack handler registered");
       } catch (e) {
-        console.error("[MediaSession] previoustrack not supported:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("seekbackward", null);
-        console.log("[MediaSession] seekbackward set to null");
       } catch (e) {
-        console.error("[MediaSession] seekbackward null failed:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("seekforward", null);
-        console.log("[MediaSession] seekforward set to null");
       } catch (e) {
-        console.error("[MediaSession] seekforward null failed:", e);
       }
-      console.log("[MediaSession] All action handlers registered");
-    } else {
-      console.warn("[MediaSession] navigator.mediaSession not available");
     }
   }
   formatTime(seconds) {
@@ -1821,7 +1781,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   }
   async playTrack(index) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e;
     const player = window.vectrolaPlayer;
     if (!player || index < 0 || index >= player.playlist.length)
       return;
@@ -1922,7 +1882,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     player.currentIndex = index;
     player.currentTrack = track;
     if ("mediaSession" in navigator) {
-      console.log("[MediaSession] Setting metadata:", { title: track.title, artist: track.artist, album: track.album || "" });
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: track.artist,
@@ -1932,7 +1891,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         ] : []
       });
       navigator.mediaSession.playbackState = "playing";
-      console.log("[MediaSession] Metadata set, playbackState = playing");
       try {
         navigator.mediaSession.setActionHandler("play", () => {
           if (player.audio.paused)
@@ -2009,12 +1967,10 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     if (player.overlayVisible) {
       this.updateOverlayContent();
     }
-    console.log("[playTrack] Calling highlight updaters after play, count:", ((_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.size) || 0);
-    (_f = window.vectrolaHighlightUpdaters) == null ? void 0 : _f.forEach((fn) => fn());
+    (_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.forEach((fn) => fn());
     document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
       row.classList.add("audio-playing");
     });
-    console.log("[playTrack] Track playing:", track.title, "index:", index);
     if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
       player.shuffleHistory.push(index);
     }
@@ -2090,7 +2046,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     }
   }
   nextTrack() {
-    var _a, _b, _c;
+    var _a;
     const player = window.vectrolaPlayer;
     if (!player || !player.playlist.length)
       return;
@@ -2118,17 +2074,15 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     }
     player.currentIndex = nextIndex;
     player.currentTrack = player.playlist[nextIndex];
-    console.log("[nextTrack] Setting currentIndex:", nextIndex, "track:", (_a = player.currentTrack) == null ? void 0 : _a.title);
     this.updateFullPlayerUI();
     const queueList = document.querySelector(".vectrola-queue-list");
     if (queueList)
       this.rebuildQueueList(queueList);
-    console.log("[nextTrack] Calling highlight updaters, count:", ((_b = window.vectrolaHighlightUpdaters) == null ? void 0 : _b.size) || 0);
-    (_c = window.vectrolaHighlightUpdaters) == null ? void 0 : _c.forEach((fn) => fn());
+    (_a = window.vectrolaHighlightUpdaters) == null ? void 0 : _a.forEach((fn) => fn());
     this.playTrack(nextIndex);
   }
   prevTrack() {
-    var _a, _b, _c;
+    var _a;
     const player = window.vectrolaPlayer;
     if (!player || !player.playlist.length)
       return;
@@ -2141,13 +2095,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     }
     player.currentIndex = prevIndex;
     player.currentTrack = player.playlist[prevIndex];
-    console.log("[prevTrack] Setting currentIndex:", prevIndex, "track:", (_a = player.currentTrack) == null ? void 0 : _a.title);
     this.updateFullPlayerUI();
-    const queueList = document.querySelector(".vectrola-queue-list");
-    if (queueList)
-      this.rebuildQueueList(queueList);
-    console.log("[prevTrack] Calling highlight updaters, count:", ((_b = window.vectrolaHighlightUpdaters) == null ? void 0 : _b.size) || 0);
-    (_c = window.vectrolaHighlightUpdaters) == null ? void 0 : _c.forEach((fn) => fn());
+    const queueList2 = document.querySelector(".vectrola-queue-list");
+    if (queueList2)
+      this.rebuildQueueList(queueList2);
+    (_a = window.vectrolaHighlightUpdaters) == null ? void 0 : _a.forEach((fn) => fn());
     this.playTrack(prevIndex);
   }
   toggleShuffle() {

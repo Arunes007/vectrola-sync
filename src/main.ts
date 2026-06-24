@@ -41,7 +41,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 	private sync!: SyncEngine;
 
 	async onload() {
-		console.log('[onload] Plugin loading...');
 		await this.loadSettings();
 
 		// CRITICAL: Clear any lingering animation states from previous session
@@ -172,14 +171,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Force re-render of cached pages to register highlight updaters
 		this.app.workspace.onLayoutReady(() => {
-			console.log('[onLayoutReady] Triggering re-render of active markdown views');
 			// Small delay to ensure everything is loaded
 			setTimeout(() => {
 				// If player doesn't exist but we have saved state, create it
 				if (!window.vectrolaPlayer) {
 					const saved = localStorage.getItem('vectrola-last-track');
 					if (saved) {
-						console.log('[onLayoutReady] Creating player from localStorage');
 						try {
 							const data = JSON.parse(saved);
 							window.vectrolaPlayer = {
@@ -199,14 +196,13 @@ export default class VectrolaSyncPlugin extends Plugin {
 							};
 							window.vectrolaPlayer.audio.preload = "none";
 						} catch (e) {
-							console.warn('[onLayoutReady] Failed to restore player:', e);
+							// Failed to restore player
 						}
 					}
 				}
 
 				// Ensure MediaSession handlers are registered if player exists
 				if (window.vectrolaPlayer) {
-					console.log('[onLayoutReady] Registering MediaSession handlers');
 					this.setupAudioEventListeners();
 				}
 
@@ -215,7 +211,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 						const view = leaf.view as any;
 						// Trigger re-render of the preview
 						if (view.previewMode?.rerender) {
-							console.log('[onLayoutReady] Re-rendering view:', leaf.getDisplayText());
 							view.previewMode.rerender(true);
 						}
 					}
@@ -256,7 +251,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 	// =========================================================================
 
 	private renderVectrolaPlayer(source: string, container: HTMLElement) {
-		console.log('[renderVectrolaPlayer] Called for page');
 		try {
 			const config = JSON.parse(source);
 			const playlist: TrackInfo[] = config.playlist || [];
@@ -400,15 +394,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			// Update track highlight for this page's list
 			const updateLocalHighlight = () => {
-				console.log('[updateLocalHighlight] Running, trackListEl in document:', document.contains(trackListEl), 'currentTrack:', player.currentTrack?.title);
 				const rows = trackListEl.querySelectorAll(".vectrola-track-row");
-				console.log('[updateLocalHighlight] Rows found:', rows.length);
 				rows.forEach((row, i) => {
 					const track = playlist[i];
 					const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
-					if (isCurrentTrack) {
-						console.log('[updateLocalHighlight] Found match at index', i, 'track:', track.title);
-					}
 					row.classList.toggle("is-playing", !!isCurrentTrack);
 					// Also toggle audio-playing based on whether audio is actually playing
 					row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
@@ -486,7 +475,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 				window.vectrolaHighlightUpdaters = new Set();
 			}
 			window.vectrolaHighlightUpdaters.add(updateLocalHighlight);
-			console.log('[Highlight] Registered updater, total:', window.vectrolaHighlightUpdaters.size);
 
 			// Watch container width and toggle compact mode (hide Artist/Album columns)
 			const resizeObserver = new ResizeObserver((entries) => {
@@ -502,7 +490,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 			// Cleanup when page unloads
 			const observer = new MutationObserver(() => {
 				if (!document.contains(trackListEl)) {
-					console.log('[Highlight] Deleting updater - trackListEl removed from document, remaining:', (window.vectrolaHighlightUpdaters?.size || 1) - 1);
 					window.vectrolaHighlightUpdaters?.delete(updateLocalHighlight);
 					resizeObserver.disconnect();
 					observer.disconnect();
@@ -539,8 +526,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 		const player = window.vectrolaPlayer;
 		if (!player) return;
 
-		console.log('[setupAudioEventListeners] Called, mediaSession available:', 'mediaSession' in navigator);
-
 		// UI progress updates only (setPositionState removed to prevent continuous flooding)
 		player.audio.addEventListener("timeupdate", () => {
 			const pf = document.getElementById("vectrola-progress-fill");
@@ -559,10 +544,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 			player.endingHandled = false;
 
 			// Tell iOS this is a finite track and declare initial position state
-			console.log('[MediaSession] loadedmetadata - updating position state', {
-				duration: player.audio.duration,
-				currentTime: player.audio.currentTime
-			});
 			this.updatePositionState();
 		});
 
@@ -627,48 +608,34 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Media Session action handlers (lock screen controls)
 		if ('mediaSession' in navigator) {
-			console.log('[MediaSession] Registering action handlers...');
 			try {
 				navigator.mediaSession.setActionHandler('play', () => {
-					console.log('[MediaSession] play handler called');
 					if (player.audio.paused) this.togglePlayPause();
 				});
-				console.log('[MediaSession] play handler registered');
-			} catch (e) { console.error('[MediaSession] play not supported:', e); }
+			} catch (e) { /* not supported */ }
 			try {
 				navigator.mediaSession.setActionHandler('pause', () => {
-					console.log('[MediaSession] pause handler called');
 					if (!player.audio.paused) this.togglePlayPause();
 				});
-				console.log('[MediaSession] pause handler registered');
-			} catch (e) { console.error('[MediaSession] pause not supported:', e); }
+			} catch (e) { /* not supported */ }
 			try {
 				navigator.mediaSession.setActionHandler('nexttrack', () => {
-					console.log('[MediaSession] nexttrack handler called');
 					this.nextTrack();
 				});
-				console.log('[MediaSession] nexttrack handler registered');
-			} catch (e) { console.error('[MediaSession] nexttrack not supported:', e); }
+			} catch (e) { /* not supported */ }
 			try {
 				navigator.mediaSession.setActionHandler('previoustrack', () => {
-					console.log('[MediaSession] previoustrack handler called');
 					this.prevTrack();
 				});
-				console.log('[MediaSession] previoustrack handler registered');
-			} catch (e) { console.error('[MediaSession] previoustrack not supported:', e); }
+			} catch (e) { /* not supported */ }
 
 			// Unregister seek handlers to force iOS lock screen to prioritize track navigation UI (⏮ ⏭)
 			try {
 				navigator.mediaSession.setActionHandler('seekbackward', null);
-				console.log('[MediaSession] seekbackward set to null');
-			} catch (e) { console.error('[MediaSession] seekbackward null failed:', e); }
+			} catch (e) { /* not supported */ }
 			try {
 				navigator.mediaSession.setActionHandler('seekforward', null);
-				console.log('[MediaSession] seekforward set to null');
-			} catch (e) { console.error('[MediaSession] seekforward null failed:', e); }
-			console.log('[MediaSession] All action handlers registered');
-		} else {
-			console.warn('[MediaSession] navigator.mediaSession not available');
+			} catch (e) { /* not supported */ }
 		}
 	}
 
@@ -800,7 +767,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Update Media Session metadata for lock screen controls
 		if ('mediaSession' in navigator) {
-			console.log('[MediaSession] Setting metadata:', { title: track.title, artist: track.artist, album: track.album || '' });
 			navigator.mediaSession.metadata = new MediaMetadata({
 				title: track.title,
 				artist: track.artist,
@@ -810,7 +776,6 @@ export default class VectrolaSyncPlugin extends Plugin {
 				] : []
 			});
 			navigator.mediaSession.playbackState = 'playing';
-			console.log('[MediaSession] Metadata set, playbackState = playing');
 
 			// Re-register track navigation handlers on every play to ensure iOS sees them
 			// iOS needs handlers registered while audio is active, not just at startup
@@ -878,14 +843,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 		}
 
 		// Update all registered highlight updaters
-		console.log('[playTrack] Calling highlight updaters after play, count:', window.vectrolaHighlightUpdaters?.size || 0);
 		window.vectrolaHighlightUpdaters?.forEach(fn => fn());
 
 		// Add audio-playing class to current track row for equalizer animation
 		document.querySelectorAll(".vectrola-track-row.is-playing").forEach(row => {
 			row.classList.add("audio-playing");
 		});
-		console.log('[playTrack] Track playing:', track.title, 'index:', index);
 
 		if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
 			player.shuffleHistory.push(index);
@@ -1011,13 +974,11 @@ export default class VectrolaSyncPlugin extends Plugin {
 		// Optimistic UI update - set track info immediately
 		player.currentIndex = nextIndex;
 		player.currentTrack = player.playlist[nextIndex];
-		console.log('[nextTrack] Setting currentIndex:', nextIndex, 'track:', player.currentTrack?.title);
 		this.updateFullPlayerUI();
 		const queueList = document.querySelector('.vectrola-queue-list');
 		if (queueList) this.rebuildQueueList(queueList as HTMLElement);
 
 		// Update all registered highlight updaters
-		console.log('[nextTrack] Calling highlight updaters, count:', window.vectrolaHighlightUpdaters?.size || 0);
 		window.vectrolaHighlightUpdaters?.forEach(fn => fn());
 
 		// Then load and play audio in background
@@ -1039,13 +1000,11 @@ export default class VectrolaSyncPlugin extends Plugin {
 		// Optimistic UI update - set track info immediately
 		player.currentIndex = prevIndex;
 		player.currentTrack = player.playlist[prevIndex];
-		console.log('[prevTrack] Setting currentIndex:', prevIndex, 'track:', player.currentTrack?.title);
 		this.updateFullPlayerUI();
-		const queueList = document.querySelector('.vectrola-queue-list');
-		if (queueList) this.rebuildQueueList(queueList as HTMLElement);
+		const queueList2 = document.querySelector('.vectrola-queue-list');
+		if (queueList2) this.rebuildQueueList(queueList2 as HTMLElement);
 
 		// Update all registered highlight updaters
-		console.log('[prevTrack] Calling highlight updaters, count:', window.vectrolaHighlightUpdaters?.size || 0);
 		window.vectrolaHighlightUpdaters?.forEach(fn => fn());
 
 		// Then load and play audio in background
