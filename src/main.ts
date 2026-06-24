@@ -168,6 +168,24 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Set up periodic sync
 		this.setupSyncInterval();
+
+		// Force re-render of cached pages to register highlight updaters
+		this.app.workspace.onLayoutReady(() => {
+			console.log('[onLayoutReady] Triggering re-render of active markdown views');
+			// Small delay to ensure everything is loaded
+			setTimeout(() => {
+				this.app.workspace.iterateAllLeaves((leaf) => {
+					if (leaf.view.getViewType() === 'markdown') {
+						const view = leaf.view as any;
+						// Trigger re-render of the preview
+						if (view.previewMode?.rerender) {
+							console.log('[onLayoutReady] Re-rendering view:', leaf.getDisplayText());
+							view.previewMode.rerender(true);
+						}
+					}
+				});
+			}, 500);
+		});
 	}
 
 	onunload() {

@@ -1406,6 +1406,21 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       setTimeout(() => this.sync.syncFromDrive(), 3e3);
     }
     this.setupSyncInterval();
+    this.app.workspace.onLayoutReady(() => {
+      console.log("[onLayoutReady] Triggering re-render of active markdown views");
+      setTimeout(() => {
+        this.app.workspace.iterateAllLeaves((leaf) => {
+          var _a2;
+          if (leaf.view.getViewType() === "markdown") {
+            const view = leaf.view;
+            if ((_a2 = view.previewMode) == null ? void 0 : _a2.rerender) {
+              console.log("[onLayoutReady] Re-rendering view:", leaf.getDisplayText());
+              view.previewMode.rerender(true);
+            }
+          }
+        });
+      }, 500);
+    });
   }
   onunload() {
     if (this.syncInterval) {
