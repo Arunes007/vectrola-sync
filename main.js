@@ -51,7 +51,7 @@ var require_spark_md5 = __commonJS({
         }
         glob.SparkMD5 = factory();
       }
-    })(function(undefined) {
+    })(function(undefined2) {
       "use strict";
       var add32 = function(a, b) {
         return a + b & 4294967295;
@@ -294,7 +294,7 @@ var require_spark_md5 = __commonJS({
           }
           ArrayBuffer.prototype.slice = function(from, to) {
             var length = this.byteLength, begin = clamp(from, length), end = length, num, target, targetArray, sourceArray;
-            if (to !== undefined) {
+            if (to !== undefined2) {
               end = clamp(to, length);
             }
             if (begin > end) {
@@ -1324,9 +1324,9 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     if (window.vectrolaPlayer) {
       if (window.vectrolaPlayer.audio) {
         window.vectrolaPlayer.audio.pause();
-        window.vectrolaPlayer.audio.currentTime = 0;
+        window.vectrolaPlayer.audio.src = "";
       }
-      window.vectrolaPlayer.isPlaying = false;
+      window.vectrolaPlayer = void 0;
     }
     this.drive = createDriveClient(() => this.auth.getValidAccessToken());
     this.auth = createAuthManager({
@@ -1933,36 +1933,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       });
       navigator.mediaSession.playbackState = "playing";
       console.log("[MediaSession] Metadata set, playbackState = playing");
-      try {
-        navigator.mediaSession.setActionHandler("play", () => {
-          if (player.audio.paused)
-            this.togglePlayPause();
-        });
-      } catch (e) {
-      }
-      try {
-        navigator.mediaSession.setActionHandler("pause", () => {
-          if (!player.audio.paused)
-            this.togglePlayPause();
-        });
-      } catch (e) {
-      }
-      try {
-        navigator.mediaSession.setActionHandler("nexttrack", () => this.nextTrack());
-      } catch (e) {
-      }
-      try {
-        navigator.mediaSession.setActionHandler("previoustrack", () => this.prevTrack());
-      } catch (e) {
-      }
-      try {
-        navigator.mediaSession.setActionHandler("seekbackward", null);
-      } catch (e) {
-      }
-      try {
-        navigator.mediaSession.setActionHandler("seekforward", null);
-      } catch (e) {
-      }
     }
     localStorage.setItem("vectrola-last-track", JSON.stringify({
       track,
