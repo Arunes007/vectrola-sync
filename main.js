@@ -1539,9 +1539,14 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       const trackListEl = container.createEl("div");
       trackListEl.className = "vectrola-track-list";
       const updateLocalHighlight = () => {
+        var _a2, _b2;
+        console.log("[updateLocalHighlight] Running for page, currentTrack:", (_a2 = player.currentTrack) == null ? void 0 : _a2.title, "track_id:", (_b2 = player.currentTrack) == null ? void 0 : _b2.track_id);
         trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
           const track = playlist[i];
           const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
+          if (isCurrentTrack) {
+            console.log("[updateLocalHighlight] Found match at index", i, "track:", track.title);
+          }
           row.classList.toggle("is-playing", !!isCurrentTrack);
           row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
         });
@@ -1763,7 +1768,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   }
   async playTrack(index) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const player = window.vectrolaPlayer;
     if (!player || index < 0 || index >= player.playlist.length)
       return;
@@ -1921,10 +1926,12 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     if (player.overlayVisible) {
       this.updateOverlayContent();
     }
-    (_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.forEach((fn) => fn());
+    console.log("[playTrack] Calling highlight updaters after play, count:", ((_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.size) || 0);
+    (_f = window.vectrolaHighlightUpdaters) == null ? void 0 : _f.forEach((fn) => fn());
     document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
       row.classList.add("audio-playing");
     });
+    console.log("[playTrack] Track playing:", track.title, "index:", index);
     if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
       player.shuffleHistory.push(index);
     }
@@ -2000,6 +2007,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     }
   }
   nextTrack() {
+    var _a, _b, _c;
     const player = window.vectrolaPlayer;
     if (!player || !player.playlist.length)
       return;
@@ -2027,13 +2035,17 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     }
     player.currentIndex = nextIndex;
     player.currentTrack = player.playlist[nextIndex];
+    console.log("[nextTrack] Setting currentIndex:", nextIndex, "track:", (_a = player.currentTrack) == null ? void 0 : _a.title);
     this.updateFullPlayerUI();
     const queueList = document.querySelector(".vectrola-queue-list");
     if (queueList)
       this.rebuildQueueList(queueList);
+    console.log("[nextTrack] Calling highlight updaters, count:", ((_b = window.vectrolaHighlightUpdaters) == null ? void 0 : _b.size) || 0);
+    (_c = window.vectrolaHighlightUpdaters) == null ? void 0 : _c.forEach((fn) => fn());
     this.playTrack(nextIndex);
   }
   prevTrack() {
+    var _a, _b, _c;
     const player = window.vectrolaPlayer;
     if (!player || !player.playlist.length)
       return;
@@ -2046,10 +2058,13 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     }
     player.currentIndex = prevIndex;
     player.currentTrack = player.playlist[prevIndex];
+    console.log("[prevTrack] Setting currentIndex:", prevIndex, "track:", (_a = player.currentTrack) == null ? void 0 : _a.title);
     this.updateFullPlayerUI();
     const queueList = document.querySelector(".vectrola-queue-list");
     if (queueList)
       this.rebuildQueueList(queueList);
+    console.log("[prevTrack] Calling highlight updaters, count:", ((_b = window.vectrolaHighlightUpdaters) == null ? void 0 : _b.size) || 0);
+    (_c = window.vectrolaHighlightUpdaters) == null ? void 0 : _c.forEach((fn) => fn());
     this.playTrack(prevIndex);
   }
   toggleShuffle() {

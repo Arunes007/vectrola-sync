@@ -345,9 +345,13 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			// Update track highlight for this page's list
 			const updateLocalHighlight = () => {
+				console.log('[updateLocalHighlight] Running for page, currentTrack:', player.currentTrack?.title, 'track_id:', player.currentTrack?.track_id);
 				trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
 					const track = playlist[i];
 					const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
+					if (isCurrentTrack) {
+						console.log('[updateLocalHighlight] Found match at index', i, 'track:', track.title);
+					}
 					row.classList.toggle("is-playing", !!isCurrentTrack);
 					// Also toggle audio-playing based on whether audio is actually playing
 					row.classList.toggle("audio-playing", !!isCurrentTrack && player.isPlaying);
@@ -804,12 +808,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 		}
 
 		// Update all registered highlight updaters
+		console.log('[playTrack] Calling highlight updaters after play, count:', window.vectrolaHighlightUpdaters?.size || 0);
 		window.vectrolaHighlightUpdaters?.forEach(fn => fn());
 
 		// Add audio-playing class to current track row for equalizer animation
 		document.querySelectorAll(".vectrola-track-row.is-playing").forEach(row => {
 			row.classList.add("audio-playing");
 		});
+		console.log('[playTrack] Track playing:', track.title, 'index:', index);
 
 		if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
 			player.shuffleHistory.push(index);
@@ -935,9 +941,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 		// Optimistic UI update - set track info immediately
 		player.currentIndex = nextIndex;
 		player.currentTrack = player.playlist[nextIndex];
+		console.log('[nextTrack] Setting currentIndex:', nextIndex, 'track:', player.currentTrack?.title);
 		this.updateFullPlayerUI();
 		const queueList = document.querySelector('.vectrola-queue-list');
 		if (queueList) this.rebuildQueueList(queueList as HTMLElement);
+
+		// Update all registered highlight updaters
+		console.log('[nextTrack] Calling highlight updaters, count:', window.vectrolaHighlightUpdaters?.size || 0);
+		window.vectrolaHighlightUpdaters?.forEach(fn => fn());
 
 		// Then load and play audio in background
 		this.playTrack(nextIndex);
@@ -958,9 +969,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 		// Optimistic UI update - set track info immediately
 		player.currentIndex = prevIndex;
 		player.currentTrack = player.playlist[prevIndex];
+		console.log('[prevTrack] Setting currentIndex:', prevIndex, 'track:', player.currentTrack?.title);
 		this.updateFullPlayerUI();
 		const queueList = document.querySelector('.vectrola-queue-list');
 		if (queueList) this.rebuildQueueList(queueList as HTMLElement);
+
+		// Update all registered highlight updaters
+		console.log('[prevTrack] Calling highlight updaters, count:', window.vectrolaHighlightUpdaters?.size || 0);
+		window.vectrolaHighlightUpdaters?.forEach(fn => fn());
 
 		// Then load and play audio in background
 		this.playTrack(prevIndex);
