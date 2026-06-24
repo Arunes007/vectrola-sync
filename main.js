@@ -1434,6 +1434,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
   // =========================================================================
   renderVectrolaPlayer(source, container) {
     var _a, _b;
+    console.log("[renderVectrolaPlayer] Called for page");
     try {
       const config = JSON.parse(source);
       const playlist = config.playlist || [];

@@ -202,6 +202,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 	// =========================================================================
 
 	private renderVectrolaPlayer(source: string, container: HTMLElement) {
+		console.log('[renderVectrolaPlayer] Called for page');
 		try {
 			const config = JSON.parse(source);
 			const playlist: TrackInfo[] = config.playlist || [];
