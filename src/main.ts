@@ -174,6 +174,12 @@ export default class VectrolaSyncPlugin extends Plugin {
 			console.log('[onLayoutReady] Triggering re-render of active markdown views');
 			// Small delay to ensure everything is loaded
 			setTimeout(() => {
+				// Ensure MediaSession handlers are registered if player exists
+				if (window.vectrolaPlayer) {
+					console.log('[onLayoutReady] Registering MediaSession handlers');
+					this.setupAudioEventListeners();
+				}
+
 				this.app.workspace.iterateAllLeaves((leaf) => {
 					if (leaf.view.getViewType() === 'markdown') {
 						const view = leaf.view as any;

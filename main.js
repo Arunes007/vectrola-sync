@@ -1409,6 +1409,10 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     this.app.workspace.onLayoutReady(() => {
       console.log("[onLayoutReady] Triggering re-render of active markdown views");
       setTimeout(() => {
+        if (window.vectrolaPlayer) {
+          console.log("[onLayoutReady] Registering MediaSession handlers");
+          this.setupAudioEventListeners();
+        }
         this.app.workspace.iterateAllLeaves((leaf) => {
           var _a2;
           if (leaf.view.getViewType() === "markdown") {
