@@ -494,6 +494,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 			player.endingHandled = false;
 
 			// Tell iOS this is a finite track and declare initial position state
+			console.log('[MediaSession] loadedmetadata - updating position state', {
+				duration: player.audio.duration,
+				currentTime: player.audio.currentTime
+			});
 			this.updatePositionState();
 		});
 
@@ -558,30 +562,48 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Media Session action handlers (lock screen controls)
 		if ('mediaSession' in navigator) {
+			console.log('[MediaSession] Registering action handlers...');
 			try {
 				navigator.mediaSession.setActionHandler('play', () => {
+					console.log('[MediaSession] play handler called');
 					if (player.audio.paused) this.togglePlayPause();
 				});
-			} catch (e) { /* play not supported */ }
+				console.log('[MediaSession] play handler registered');
+			} catch (e) { console.error('[MediaSession] play not supported:', e); }
 			try {
 				navigator.mediaSession.setActionHandler('pause', () => {
+					console.log('[MediaSession] pause handler called');
 					if (!player.audio.paused) this.togglePlayPause();
 				});
-			} catch (e) { /* pause not supported */ }
+				console.log('[MediaSession] pause handler registered');
+			} catch (e) { console.error('[MediaSession] pause not supported:', e); }
 			try {
 				navigator.mediaSession.setActionHandler('nexttrack', () => {
+					console.log('[MediaSession] nexttrack handler called');
 					this.nextTrack();
 				});
-			} catch (e) { /* nexttrack not supported */ }
+				console.log('[MediaSession] nexttrack handler registered');
+			} catch (e) { console.error('[MediaSession] nexttrack not supported:', e); }
 			try {
 				navigator.mediaSession.setActionHandler('previoustrack', () => {
+					console.log('[MediaSession] previoustrack handler called');
 					this.prevTrack();
 				});
-			} catch (e) { /* previoustrack not supported */ }
+				console.log('[MediaSession] previoustrack handler registered');
+			} catch (e) { console.error('[MediaSession] previoustrack not supported:', e); }
 
 			// Unregister seek handlers to force iOS lock screen to prioritize track navigation UI (⏮ ⏭)
-			try { navigator.mediaSession.setActionHandler('seekbackward', null); } catch (e) {}
-			try { navigator.mediaSession.setActionHandler('seekforward', null); } catch (e) {}
+			try {
+				navigator.mediaSession.setActionHandler('seekbackward', null);
+				console.log('[MediaSession] seekbackward set to null');
+			} catch (e) { console.error('[MediaSession] seekbackward null failed:', e); }
+			try {
+				navigator.mediaSession.setActionHandler('seekforward', null);
+				console.log('[MediaSession] seekforward set to null');
+			} catch (e) { console.error('[MediaSession] seekforward null failed:', e); }
+			console.log('[MediaSession] All action handlers registered');
+		} else {
+			console.warn('[MediaSession] navigator.mediaSession not available');
 		}
 	}
 
@@ -713,6 +735,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		// Update Media Session metadata for lock screen controls
 		if ('mediaSession' in navigator) {
+			console.log('[MediaSession] Setting metadata:', { title: track.title, artist: track.artist, album: track.album || '' });
 			navigator.mediaSession.metadata = new MediaMetadata({
 				title: track.title,
 				artist: track.artist,
@@ -722,6 +745,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				] : []
 			});
 			navigator.mediaSession.playbackState = 'playing';
+			console.log('[MediaSession] Metadata set, playbackState = playing');
 		}
 
 		// Persist last played track to localStorage

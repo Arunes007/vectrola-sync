@@ -1649,6 +1649,10 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       if (tt)
         tt.textContent = this.formatTime(player.audio.duration);
       player.endingHandled = false;
+      console.log("[MediaSession] loadedmetadata - updating position state", {
+        duration: player.audio.duration,
+        currentTime: player.audio.currentTime
+      });
       this.updatePositionState();
     });
     player.audio.addEventListener("seeked", () => {
@@ -1695,40 +1699,60 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       }
     });
     if ("mediaSession" in navigator) {
+      console.log("[MediaSession] Registering action handlers...");
       try {
         navigator.mediaSession.setActionHandler("play", () => {
+          console.log("[MediaSession] play handler called");
           if (player.audio.paused)
             this.togglePlayPause();
         });
+        console.log("[MediaSession] play handler registered");
       } catch (e) {
+        console.error("[MediaSession] play not supported:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("pause", () => {
+          console.log("[MediaSession] pause handler called");
           if (!player.audio.paused)
             this.togglePlayPause();
         });
+        console.log("[MediaSession] pause handler registered");
       } catch (e) {
+        console.error("[MediaSession] pause not supported:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("nexttrack", () => {
+          console.log("[MediaSession] nexttrack handler called");
           this.nextTrack();
         });
+        console.log("[MediaSession] nexttrack handler registered");
       } catch (e) {
+        console.error("[MediaSession] nexttrack not supported:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("previoustrack", () => {
+          console.log("[MediaSession] previoustrack handler called");
           this.prevTrack();
         });
+        console.log("[MediaSession] previoustrack handler registered");
       } catch (e) {
+        console.error("[MediaSession] previoustrack not supported:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("seekbackward", null);
+        console.log("[MediaSession] seekbackward set to null");
       } catch (e) {
+        console.error("[MediaSession] seekbackward null failed:", e);
       }
       try {
         navigator.mediaSession.setActionHandler("seekforward", null);
+        console.log("[MediaSession] seekforward set to null");
       } catch (e) {
+        console.error("[MediaSession] seekforward null failed:", e);
       }
+      console.log("[MediaSession] All action handlers registered");
+    } else {
+      console.warn("[MediaSession] navigator.mediaSession not available");
     }
   }
   formatTime(seconds) {
@@ -1840,6 +1864,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     player.currentIndex = index;
     player.currentTrack = track;
     if ("mediaSession" in navigator) {
+      console.log("[MediaSession] Setting metadata:", { title: track.title, artist: track.artist, album: track.album || "" });
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: track.artist,
@@ -1849,6 +1874,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         ] : []
       });
       navigator.mediaSession.playbackState = "playing";
+      console.log("[MediaSession] Metadata set, playbackState = playing");
     }
     localStorage.setItem("vectrola-last-track", JSON.stringify({
       track,
