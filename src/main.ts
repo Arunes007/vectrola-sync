@@ -174,6 +174,35 @@ export default class VectrolaSyncPlugin extends Plugin {
 			console.log('[onLayoutReady] Triggering re-render of active markdown views');
 			// Small delay to ensure everything is loaded
 			setTimeout(() => {
+				// If player doesn't exist but we have saved state, create it
+				if (!window.vectrolaPlayer) {
+					const saved = localStorage.getItem('vectrola-last-track');
+					if (saved) {
+						console.log('[onLayoutReady] Creating player from localStorage');
+						try {
+							const data = JSON.parse(saved);
+							window.vectrolaPlayer = {
+								audio: new Audio(),
+								currentTrack: data.track,
+								currentIndex: data.index,
+								isPlaying: false,
+								shuffleMode: false,
+								repeatMode: 'off',
+								shuffleHistory: [],
+								playlist: data.playlist || [],
+								playlistSource: data.playlistSource,
+								ui: null,
+								overlayVisible: false,
+								volume: 1,
+								endingHandled: false,
+							};
+							window.vectrolaPlayer.audio.preload = "none";
+						} catch (e) {
+							console.warn('[onLayoutReady] Failed to restore player:', e);
+						}
+					}
+				}
+
 				// Ensure MediaSession handlers are registered if player exists
 				if (window.vectrolaPlayer) {
 					console.log('[onLayoutReady] Registering MediaSession handlers');
