@@ -58,10 +58,9 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (window.vectrolaPlayer) {
 			if (window.vectrolaPlayer.audio) {
 				window.vectrolaPlayer.audio.pause();
-				window.vectrolaPlayer.audio.src = ''; // Release audio resources
+				window.vectrolaPlayer.audio.currentTime = 0;
 			}
-			// Completely destroy the player so it gets recreated fresh with proper MediaSession handlers
-			window.vectrolaPlayer = undefined as any;
+			window.vectrolaPlayer.isPlaying = false;
 		}
 
 		// Initialize modules
@@ -812,6 +811,15 @@ export default class VectrolaSyncPlugin extends Plugin {
 			});
 			navigator.mediaSession.playbackState = 'playing';
 			console.log('[MediaSession] Metadata set, playbackState = playing');
+
+			// Re-register track navigation handlers on every play to ensure iOS sees them
+			// iOS needs handlers registered while audio is active, not just at startup
+			try { navigator.mediaSession.setActionHandler('play', () => { if (player.audio.paused) this.togglePlayPause(); }); } catch (e) {}
+			try { navigator.mediaSession.setActionHandler('pause', () => { if (!player.audio.paused) this.togglePlayPause(); }); } catch (e) {}
+			try { navigator.mediaSession.setActionHandler('nexttrack', () => this.nextTrack()); } catch (e) {}
+			try { navigator.mediaSession.setActionHandler('previoustrack', () => this.prevTrack()); } catch (e) {}
+			try { navigator.mediaSession.setActionHandler('seekbackward', null); } catch (e) {}
+			try { navigator.mediaSession.setActionHandler('seekforward', null); } catch (e) {}
 		}
 
 		// Persist last played track to localStorage

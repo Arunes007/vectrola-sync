@@ -1,6 +1,6 @@
 {
   "name": "obsidian-vectrola-sync",
-  "version": "1.8.0",
+  "version": "1.7.0",
   "description": "Sync Vectrola music wiki with Google Drive",
   "main": "main.js",
   "scripts": {
