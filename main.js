@@ -1933,6 +1933,36 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       });
       navigator.mediaSession.playbackState = "playing";
       console.log("[MediaSession] Metadata set, playbackState = playing");
+      try {
+        navigator.mediaSession.setActionHandler("play", () => {
+          if (player.audio.paused)
+            this.togglePlayPause();
+        });
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("pause", () => {
+          if (!player.audio.paused)
+            this.togglePlayPause();
+        });
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("nexttrack", () => this.nextTrack());
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("previoustrack", () => this.prevTrack());
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("seekbackward", null);
+      } catch (e) {
+      }
+      try {
+        navigator.mediaSession.setActionHandler("seekforward", null);
+      } catch (e) {
+      }
     }
     localStorage.setItem("vectrola-last-track", JSON.stringify({
       track,
