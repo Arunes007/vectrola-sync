@@ -1643,6 +1643,16 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       const tt = document.getElementById("vectrola-total-time");
       if (tt)
         tt.textContent = this.formatTime(player.audio.duration);
+      if ("mediaSession" in navigator && player.audio.duration && !isNaN(player.audio.duration)) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: player.audio.duration,
+            playbackRate: player.audio.playbackRate || 1,
+            position: player.audio.currentTime || 0
+          });
+        } catch (e) {
+        }
+      }
     });
     player.audio.addEventListener("ended", () => {
       if (!player.endingHandled) {

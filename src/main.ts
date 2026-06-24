@@ -484,6 +484,19 @@ export default class VectrolaSyncPlugin extends Plugin {
 		player.audio.addEventListener("loadedmetadata", () => {
 			const tt = document.getElementById("vectrola-total-time");
 			if (tt) tt.textContent = this.formatTime(player.audio.duration);
+
+			// Tell iOS this is a finite track (not a podcast/stream) to show track skip buttons
+			if ('mediaSession' in navigator && player.audio.duration && !isNaN(player.audio.duration)) {
+				try {
+					navigator.mediaSession.setPositionState({
+						duration: player.audio.duration,
+						playbackRate: player.audio.playbackRate || 1.0,
+						position: player.audio.currentTime || 0
+					});
+				} catch (e) {
+					// Ignore
+				}
+			}
 		});
 
 		player.audio.addEventListener("ended", () => {
