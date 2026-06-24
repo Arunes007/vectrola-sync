@@ -1644,7 +1644,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       if (tt)
         tt.textContent = this.formatTime(player.audio.duration);
     });
-    player.audio.addEventListener("ended", () => this.nextTrack());
+    player.audio.addEventListener("ended", () => {
+      if (!player.endingHandled) {
+        this.nextTrack();
+      }
+    });
     player.audio.addEventListener("timeupdate", () => {
       if (player.audio.duration && !player.audio.paused && !player.endingHandled && player.audio.currentTime >= player.audio.duration - 0.5) {
         player.endingHandled = true;

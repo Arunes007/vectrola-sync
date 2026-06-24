@@ -486,7 +486,11 @@ export default class VectrolaSyncPlugin extends Plugin {
 			if (tt) tt.textContent = this.formatTime(player.audio.duration);
 		});
 
-		player.audio.addEventListener("ended", () => this.nextTrack());
+		player.audio.addEventListener("ended", () => {
+			if (!player.endingHandled) {
+				this.nextTrack();
+			}
+		});
 
 		// iOS workaround: detect end of track via timeupdate when ended event doesn't fire
 		// No setTimeout - iOS throttles/freezes timers when backgrounded
