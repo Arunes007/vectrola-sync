@@ -345,8 +345,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 			// Update track highlight for this page's list
 			const updateLocalHighlight = () => {
-				console.log('[updateLocalHighlight] Running for page, currentTrack:', player.currentTrack?.title, 'track_id:', player.currentTrack?.track_id);
-				trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
+				console.log('[updateLocalHighlight] Running, trackListEl in document:', document.contains(trackListEl), 'currentTrack:', player.currentTrack?.title);
+				const rows = trackListEl.querySelectorAll(".vectrola-track-row");
+				console.log('[updateLocalHighlight] Rows found:', rows.length);
+				rows.forEach((row, i) => {
 					const track = playlist[i];
 					const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
 					if (isCurrentTrack) {
@@ -429,6 +431,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 				window.vectrolaHighlightUpdaters = new Set();
 			}
 			window.vectrolaHighlightUpdaters.add(updateLocalHighlight);
+			console.log('[Highlight] Registered updater, total:', window.vectrolaHighlightUpdaters.size);
 
 			// Watch container width and toggle compact mode (hide Artist/Album columns)
 			const resizeObserver = new ResizeObserver((entries) => {
@@ -444,6 +447,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			// Cleanup when page unloads
 			const observer = new MutationObserver(() => {
 				if (!document.contains(trackListEl)) {
+					console.log('[Highlight] Deleting updater - trackListEl removed from document, remaining:', (window.vectrolaHighlightUpdaters?.size || 1) - 1);
 					window.vectrolaHighlightUpdaters?.delete(updateLocalHighlight);
 					resizeObserver.disconnect();
 					observer.disconnect();

@@ -1539,9 +1539,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       const trackListEl = container.createEl("div");
       trackListEl.className = "vectrola-track-list";
       const updateLocalHighlight = () => {
-        var _a2, _b2;
-        console.log("[updateLocalHighlight] Running for page, currentTrack:", (_a2 = player.currentTrack) == null ? void 0 : _a2.title, "track_id:", (_b2 = player.currentTrack) == null ? void 0 : _b2.track_id);
-        trackListEl.querySelectorAll(".vectrola-track-row").forEach((row, i) => {
+        var _a2;
+        console.log("[updateLocalHighlight] Running, trackListEl in document:", document.contains(trackListEl), "currentTrack:", (_a2 = player.currentTrack) == null ? void 0 : _a2.title);
+        const rows = trackListEl.querySelectorAll(".vectrola-track-row");
+        console.log("[updateLocalHighlight] Rows found:", rows.length);
+        rows.forEach((row, i) => {
           const track = playlist[i];
           const isCurrentTrack = player.currentTrack && player.currentTrack.track_id === track.track_id;
           if (isCurrentTrack) {
@@ -1599,6 +1601,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         window.vectrolaHighlightUpdaters = /* @__PURE__ */ new Set();
       }
       window.vectrolaHighlightUpdaters.add(updateLocalHighlight);
+      console.log("[Highlight] Registered updater, total:", window.vectrolaHighlightUpdaters.size);
       const resizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const width = entry.contentRect.width;
@@ -1609,9 +1612,10 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       });
       resizeObserver.observe(container);
       const observer = new MutationObserver(() => {
-        var _a2;
+        var _a2, _b2;
         if (!document.contains(trackListEl)) {
-          (_a2 = window.vectrolaHighlightUpdaters) == null ? void 0 : _a2.delete(updateLocalHighlight);
+          console.log("[Highlight] Deleting updater - trackListEl removed from document, remaining:", (((_a2 = window.vectrolaHighlightUpdaters) == null ? void 0 : _a2.size) || 1) - 1);
+          (_b2 = window.vectrolaHighlightUpdaters) == null ? void 0 : _b2.delete(updateLocalHighlight);
           resizeObserver.disconnect();
           observer.disconnect();
         }
