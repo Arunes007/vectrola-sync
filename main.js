@@ -51,7 +51,7 @@ var require_spark_md5 = __commonJS({
         }
         glob.SparkMD5 = factory();
       }
-    })(function(undefined2) {
+    })(function(undefined) {
       "use strict";
       var add32 = function(a, b) {
         return a + b & 4294967295;
@@ -294,7 +294,7 @@ var require_spark_md5 = __commonJS({
           }
           ArrayBuffer.prototype.slice = function(from, to) {
             var length = this.byteLength, begin = clamp(from, length), end = length, num, target, targetArray, sourceArray;
-            if (to !== undefined2) {
+            if (to !== undefined) {
               end = clamp(to, length);
             }
             if (begin > end) {
@@ -1715,14 +1715,6 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       try {
         navigator.mediaSession.setActionHandler("previoustrack", () => {
           this.prevTrack();
-        });
-      } catch (e) {
-      }
-      try {
-        navigator.mediaSession.setActionHandler("seekto", (details) => {
-          if (details.seekTime !== void 0 && details.seekTime !== null) {
-            player.audio.currentTime = details.seekTime;
-          }
         });
       } catch (e) {
       }

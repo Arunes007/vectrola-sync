@@ -573,13 +573,8 @@ export default class VectrolaSyncPlugin extends Plugin {
 					this.prevTrack();
 				});
 			} catch (e) { /* previoustrack not supported */ }
-			try {
-				navigator.mediaSession.setActionHandler('seekto', (details) => {
-					if (details.seekTime !== undefined && details.seekTime !== null) {
-						player.audio.currentTime = details.seekTime;
-					}
-				});
-			} catch (e) { /* seekto not supported */ }
+			// NOTE: seekto is intentionally NOT registered - iOS conflates it with seek interval capabilities
+			// Timeline scrubbing works via direct currentTime manipulation in the progress bar UI
 			// Explicitly unregister seek handlers to force iOS to show track skip buttons (⏮ ⏭)
 			// iOS prioritizes seek handlers - by setting them to null, we force track navigation UI
 			try { navigator.mediaSession.setActionHandler('seekbackward', null); } catch (e) {}
