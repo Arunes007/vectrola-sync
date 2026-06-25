@@ -762,8 +762,29 @@ export default class VectrolaSyncPlugin extends Plugin {
 				let blob: Blob;
 
 				if (this.settings.audioCacheEnabled) {
-					// Protect this track from eviction while playing
-					this.audioCache.setProtected(gdriveId);
+					// Protect current + adjacent tracks from eviction
+					const protectedIds: string[] = [gdriveId];
+					const { audioCachePreloadAhead, audioCachePreloadBehind } = this.settings;
+
+					// Next N tracks
+					for (let i = 1; i <= audioCachePreloadAhead; i++) {
+						const idx = index + i;
+						if (idx < player.playlist.length) {
+							const id = player.playlist[idx].sources?.cloud?.gdrive?.file_id;
+							if (id) protectedIds.push(id);
+						}
+					}
+
+					// Previous N tracks
+					for (let i = 1; i <= audioCachePreloadBehind; i++) {
+						const idx = index - i;
+						if (idx >= 0) {
+							const id = player.playlist[idx].sources?.cloud?.gdrive?.file_id;
+							if (id) protectedIds.push(id);
+						}
+					}
+
+					this.audioCache.setProtected(protectedIds);
 
 					// Use cache with automatic deduplication and in-flight coalescing
 					// No CancellationToken for foreground playback - we want it to complete

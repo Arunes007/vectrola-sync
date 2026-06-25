@@ -68,8 +68,8 @@ export class AudioCache {
 	private totalCacheSize: number = 0;
 	private stats = { hits: 0, misses: 0 };
 
-	// Track currently-playing file to protect from eviction
-	private protectedFileId: string | null = null;
+	// Track files to protect from eviction (current + adjacent tracks)
+	private protectedFileIds: Set<string> = new Set();
 
 	private readonly DB_NAME = "vectrola-audio-cache";
 	private readonly DB_VERSION = 1;
@@ -169,11 +169,14 @@ export class AudioCache {
 	}
 
 	/**
-	 * Set a file as protected from eviction (e.g., currently playing)
-	 * Pass null to clear protection
+	 * Set files as protected from eviction (current + adjacent tracks)
+	 * Pass empty array to clear protection
 	 */
-	setProtected(fileId: string | null): void {
-		this.protectedFileId = fileId;
+	setProtected(fileIds: string[]): void {
+		this.protectedFileIds.clear();
+		for (const id of fileIds) {
+			this.protectedFileIds.add(id);
+		}
 	}
 
 	/**
@@ -357,7 +360,7 @@ export class AudioCache {
 	/**
 	 * Batch eviction: trigger at 100%, evict to 80%
 	 * Uses hybrid LRU + frequency scoring
-	 * Protects currently-playing track from eviction
+	 * Protects current + adjacent tracks from eviction
 	 */
 	private async evictToWatermark(incomingSize: number): Promise<void> {
 		if (!this.db) return;
@@ -383,8 +386,8 @@ export class AudioCache {
 		for (const entry of scored) {
 			if (projectedSize <= Math.max(0, targetSize)) break;
 
-			// Don't evict the currently-playing track!
-			if (entry.file_id === this.protectedFileId) {
+			// Don't evict protected tracks (current + adjacent)
+			if (this.protectedFileIds.has(entry.file_id)) {
 				console.log(`Skipping eviction of protected track: ${entry.file_id}`);
 				continue;
 			}

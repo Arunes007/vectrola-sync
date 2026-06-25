@@ -1369,8 +1369,8 @@ var AudioCache = class {
     // Fast existence check
     this.totalCacheSize = 0;
     this.stats = { hits: 0, misses: 0 };
-    // Track currently-playing file to protect from eviction
-    this.protectedFileId = null;
+    // Track files to protect from eviction (current + adjacent tracks)
+    this.protectedFileIds = /* @__PURE__ */ new Set();
     this.DB_NAME = "vectrola-audio-cache";
     this.DB_VERSION = 1;
     this.STORE_NAME = "audio-files";
@@ -1452,11 +1452,14 @@ var AudioCache = class {
     return this.cachedFileIds.has(fileId);
   }
   /**
-   * Set a file as protected from eviction (e.g., currently playing)
-   * Pass null to clear protection
+   * Set files as protected from eviction (current + adjacent tracks)
+   * Pass empty array to clear protection
    */
-  setProtected(fileId) {
-    this.protectedFileId = fileId;
+  setProtected(fileIds) {
+    this.protectedFileIds.clear();
+    for (const id of fileIds) {
+      this.protectedFileIds.add(id);
+    }
   }
   /**
    * Main entry point - get from cache, coalesce in-flight, or download
@@ -1584,7 +1587,7 @@ var AudioCache = class {
   /**
    * Batch eviction: trigger at 100%, evict to 80%
    * Uses hybrid LRU + frequency scoring
-   * Protects currently-playing track from eviction
+   * Protects current + adjacent tracks from eviction
    */
   async evictToWatermark(incomingSize) {
     if (!this.db)
@@ -1603,7 +1606,7 @@ var AudioCache = class {
     for (const entry of scored) {
       if (projectedSize <= Math.max(0, targetSize))
         break;
-      if (entry.file_id === this.protectedFileId) {
+      if (this.protectedFileIds.has(entry.file_id)) {
         console.log(`Skipping eviction of protected track: ${entry.file_id}`);
         continue;
       }
@@ -2310,7 +2313,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   }
   async playTrack(index) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
     const player = window.vectrolaPlayer;
     if (!player || index < 0 || index >= player.playlist.length)
       return;
@@ -2376,7 +2379,25 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       try {
         let blob;
         if (this.settings.audioCacheEnabled) {
-          this.audioCache.setProtected(gdriveId);
+          const protectedIds = [gdriveId];
+          const { audioCachePreloadAhead, audioCachePreloadBehind } = this.settings;
+          for (let i = 1; i <= audioCachePreloadAhead; i++) {
+            const idx = index + i;
+            if (idx < player.playlist.length) {
+              const id = (_g = (_f = (_e = player.playlist[idx].sources) == null ? void 0 : _e.cloud) == null ? void 0 : _f.gdrive) == null ? void 0 : _g.file_id;
+              if (id)
+                protectedIds.push(id);
+            }
+          }
+          for (let i = 1; i <= audioCachePreloadBehind; i++) {
+            const idx = index - i;
+            if (idx >= 0) {
+              const id = (_j = (_i = (_h = player.playlist[idx].sources) == null ? void 0 : _h.cloud) == null ? void 0 : _i.gdrive) == null ? void 0 : _j.file_id;
+              if (id)
+                protectedIds.push(id);
+            }
+          }
+          this.audioCache.setProtected(protectedIds);
           blob = await this.audioCache.fetchOrGet(
             gdriveId,
             () => this.drive.downloadFileBuffer(gdriveId),
@@ -2511,7 +2532,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     if (player.overlayVisible) {
       this.updateOverlayContent();
     }
-    (_e = window.vectrolaHighlightUpdaters) == null ? void 0 : _e.forEach((fn) => fn());
+    (_k = window.vectrolaHighlightUpdaters) == null ? void 0 : _k.forEach((fn) => fn());
     document.querySelectorAll(".vectrola-track-row.is-playing").forEach((row) => {
       row.classList.add("audio-playing");
     });
