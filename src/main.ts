@@ -20,6 +20,7 @@ import { createAuthManager, AuthManager } from "./auth";
 import { createDriveClient, DriveClient } from "./drive-api";
 import { createSyncEngine, SyncEngine } from "./sync";
 import { VectrolaSyncSettingTab } from "./settings-tab";
+import { AudioCache } from "./audio-cache";
 
 // =============================================================================
 // Main Plugin
@@ -39,6 +40,10 @@ export default class VectrolaSyncPlugin extends Plugin {
 	private auth!: AuthManager;
 	private drive!: DriveClient;
 	private sync!: SyncEngine;
+	private audioCache!: AudioCache;
+
+	// Track active blob URL for memory leak prevention
+	private currentAudioUrl: string | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -90,6 +95,13 @@ export default class VectrolaSyncPlugin extends Plugin {
 			saveSettings: () => this.saveSettings(),
 			isAuthenticated: () => this.auth.isAuthenticated(),
 		});
+
+		// Audio cache for Google Drive audio files
+		this.audioCache = new AudioCache({
+			maxSizeBytes: this.settings.audioCacheMaxSizeMB * 1024 * 1024,
+			isMobile: Platform.isMobile,
+		});
+		await this.audioCache.init();
 
 		// Register OAuth callback handler for obsidian://vectrola-auth
 		this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
@@ -158,6 +170,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 			syncFromDrive: () => this.sync.syncFromDrive(),
 			syncToDrive: () => this.sync.syncToDrive(),
 			setupSyncInterval: () => this.setupSyncInterval(),
+			getAudioCache: () => this.audioCache,
 		}));
 
 		// Auto-sync on vault open
@@ -222,6 +235,21 @@ export default class VectrolaSyncPlugin extends Plugin {
 	onunload() {
 		if (this.syncInterval) {
 			window.clearInterval(this.syncInterval);
+		}
+
+		// Clean up audio cache and blob URLs
+		this.cleanUpActiveAudioUrl();
+		this.audioCache?.close();
+	}
+
+	/**
+	 * Revoke active blob URL to prevent memory leaks
+	 * Object URLs persist until explicitly revoked or document unload
+	 */
+	private cleanUpActiveAudioUrl() {
+		if (this.currentAudioUrl) {
+			URL.revokeObjectURL(this.currentAudioUrl);
+			this.currentAudioUrl = null;
 		}
 	}
 
@@ -307,6 +335,14 @@ export default class VectrolaSyncPlugin extends Plugin {
 				player.playlistSource = pageTitle;
 				this.playTrack(index);
 			};
+
+			// Preload first few tracks when playlist opens
+			if (this.settings.audioCacheEnabled && playlist.length > 0) {
+				this.audioCache.preloadTracks(
+					playlist.slice(0, 3),
+					(fileId, token) => this.drive.downloadFileBuffer(fileId, token)
+				);
+			}
 
 			// === PAGE HEADER - Apple Music Style ===
 			const header = container.createEl("div");
@@ -660,6 +696,7 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (player.audio.src && player.audio.src.startsWith("blob:")) {
 			URL.revokeObjectURL(player.audio.src);
 		}
+		this.cleanUpActiveAudioUrl();
 
 		// === DESKTOP: Try local files ===
 		if (!Platform.isMobile && sources.local) {
@@ -722,11 +759,34 @@ export default class VectrolaSyncPlugin extends Plugin {
 		if (!audioLoaded && sources.cloud?.gdrive?.file_id && this.auth.isAuthenticated()) {
 			const gdriveId = sources.cloud.gdrive.file_id;
 			try {
-				const arrayBuffer = await this.drive.downloadFileBuffer(gdriveId);
-				const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-				player.audio.src = URL.createObjectURL(blob);
+				let blob: Blob;
+
+				if (this.settings.audioCacheEnabled) {
+					// Protect this track from eviction while playing
+					this.audioCache.setProtected(gdriveId);
+
+					// Use cache with automatic deduplication and in-flight coalescing
+					// No CancellationToken for foreground playback - we want it to complete
+					blob = await this.audioCache.fetchOrGet(
+						gdriveId,
+						() => this.drive.downloadFileBuffer(gdriveId),
+						{ title: track.title, artist: track.artist }
+					);
+				} else {
+					// Cache disabled - direct download
+					const arrayBuffer = await this.drive.downloadFileBuffer(gdriveId);
+					blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+					console.log("Playing from GDrive (cache disabled):", gdriveId);
+				}
+
+				this.currentAudioUrl = URL.createObjectURL(blob);
+				player.audio.src = this.currentAudioUrl;
 				audioLoaded = true;
-				console.log("Playing from GDrive:", gdriveId);
+
+				// Trigger preload of adjacent tracks
+				if (this.settings.audioCacheEnabled) {
+					this.schedulePreload(index);
+				}
 			} catch (e) {
 				console.warn("GDrive playback failed:", e);
 			}
@@ -852,6 +912,46 @@ export default class VectrolaSyncPlugin extends Plugin {
 
 		if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
 			player.shuffleHistory.push(index);
+		}
+	}
+
+	/**
+	 * Schedule preloading of adjacent tracks in background
+	 * Called after a track starts playing
+	 */
+	private schedulePreload(currentIndex: number) {
+		const player = window.vectrolaPlayer;
+		if (!player || !this.settings.audioCacheEnabled) return;
+
+		// Cancel any in-progress preloads from previous track
+		this.audioCache.cancelPreload();
+
+		const preloadTargets: TrackInfo[] = [];
+		const { audioCachePreloadAhead, audioCachePreloadBehind } = this.settings;
+
+		// Next N tracks (highest priority)
+		for (let i = 1; i <= audioCachePreloadAhead; i++) {
+			const idx = currentIndex + i;
+			if (idx < player.playlist.length) {
+				preloadTargets.push(player.playlist[idx]);
+			}
+		}
+
+		// Previous N tracks
+		for (let i = 1; i <= audioCachePreloadBehind; i++) {
+			const idx = currentIndex - i;
+			if (idx >= 0) {
+				preloadTargets.push(player.playlist[idx]);
+			}
+		}
+
+		if (preloadTargets.length > 0) {
+			// Preloads get their own CancellationTokens internally
+			// The token is passed to downloadFileBuffer for soft-cancel on skip
+			this.audioCache.preloadTracks(
+				preloadTargets,
+				(fileId, token) => this.drive.downloadFileBuffer(fileId, token)
+			);
 		}
 	}
 

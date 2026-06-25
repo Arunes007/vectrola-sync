@@ -2,8 +2,9 @@
  * Settings tab for Vectrola Sync
  */
 
-import { App, PluginSettingTab, Setting, Events } from "obsidian";
+import { App, PluginSettingTab, Setting, Events, Notice, Platform } from "obsidian";
 import { VectrolaSyncSettings } from "./types";
+import type { AudioCache, CacheStats } from "./audio-cache";
 
 // =============================================================================
 // Settings Tab Interface
@@ -21,6 +22,7 @@ export interface SettingsTabDeps {
 	syncFromDrive: () => Promise<void>;
 	syncToDrive: () => Promise<void>;
 	setupSyncInterval: () => void;
+	getAudioCache: () => AudioCache | null;
 }
 
 // =============================================================================
@@ -203,5 +205,84 @@ export class VectrolaSyncSettingTab extends PluginSettingTab {
 				cls: "setting-item-description",
 			});
 		}
+
+		// Audio Cache Settings
+		new Setting(containerEl).setName("Audio Cache").setHeading();
+
+		new Setting(containerEl)
+			.setName("Enable audio caching")
+			.setDesc("Cache played songs for instant replay (uses IndexedDB)")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.deps.settings.audioCacheEnabled)
+					.onChange(async (value) => {
+						this.deps.settings.audioCacheEnabled = value;
+						await this.deps.saveSettings();
+					})
+			);
+
+		// Mobile: cap at 200MB to avoid iOS silent purges
+		const maxLimit = Platform.isMobile ? 200 : 500;
+
+		new Setting(containerEl)
+			.setName("Cache size limit")
+			.setDesc(`Maximum storage for cached audio (50-${maxLimit} MB)`)
+			.addSlider((slider) =>
+				slider
+					.setLimits(50, maxLimit, 50)
+					.setValue(Math.min(this.deps.settings.audioCacheMaxSizeMB, maxLimit))
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.deps.settings.audioCacheMaxSizeMB = value;
+						await this.deps.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Preload ahead")
+			.setDesc("Number of next tracks to preload (0-5)")
+			.addSlider((slider) =>
+				slider
+					.setLimits(0, 5, 1)
+					.setValue(this.deps.settings.audioCachePreloadAhead)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.deps.settings.audioCachePreloadAhead = value;
+						await this.deps.saveSettings();
+					})
+			);
+
+		// Cache statistics display
+		const cache = this.deps.getAudioCache();
+		if (cache) {
+			cache.getStats().then((stats: CacheStats) => {
+				const hitRate = stats.hits + stats.misses > 0
+					? Math.round((stats.hits / (stats.hits + stats.misses)) * 100)
+					: 0;
+				const sizeText = `${(stats.totalSize / 1024 / 1024).toFixed(1)} MB`;
+
+				const statsContainer = containerEl.createEl("div", { cls: "setting-item-description" });
+				statsContainer.style.marginTop = "-10px";
+				statsContainer.style.marginBottom = "10px";
+				statsContainer.textContent = `Cache: ${sizeText} (${stats.fileCount} songs) | Hit rate: ${hitRate}% (${stats.hits} hits, ${stats.misses} misses)`;
+			});
+		}
+
+		new Setting(containerEl)
+			.setName("Clear cache")
+			.setDesc("Remove all cached audio files")
+			.addButton((btn) =>
+				btn
+					.setButtonText("Clear Cache")
+					.setWarning()
+					.onClick(async () => {
+						const cache = this.deps.getAudioCache();
+						if (cache) {
+							await cache.clear();
+							new Notice("Audio cache cleared");
+							this.display(); // Refresh to show updated stats
+						}
+					})
+			);
 	}
 }

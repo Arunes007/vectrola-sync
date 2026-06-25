@@ -3,7 +3,7 @@
  */
 
 import { requestUrl } from "obsidian";
-import { DriveFile } from "./types";
+import { DriveFile, CancellationToken } from "./types";
 
 // =============================================================================
 // Drive Client Interface
@@ -14,7 +14,7 @@ export interface DriveClient {
 	findOrCreateFolder: (path: string) => Promise<string>;
 	listDriveFiles: (folderId: string) => Promise<DriveFile[]>;
 	downloadFile: (fileId: string) => Promise<string>;
-	downloadFileBuffer: (fileId: string) => Promise<ArrayBuffer>;
+	downloadFileBuffer: (fileId: string, token?: CancellationToken) => Promise<ArrayBuffer>;
 	uploadFile: (name: string, content: string, parentId: string, existingFileId?: string) => Promise<string>;
 }
 
@@ -124,19 +124,28 @@ export function createDriveClient(getToken: () => Promise<string | null>): Drive
 		return response.text;
 	};
 
-	const downloadFileBuffer = async (fileId: string): Promise<ArrayBuffer> => {
-		const token = await getToken();
-		if (!token) {
+	const downloadFileBuffer = async (fileId: string, token?: CancellationToken): Promise<ArrayBuffer> => {
+		const authToken = await getToken();
+		if (!authToken) {
 			throw new Error("Not authenticated with Google Drive");
 		}
 
+		// Use requestUrl (CORS-safe - routes through Electron main process)
+		// Native fetch() would fail due to Google Drive CORS restrictions
 		const response = await requestUrl({
 			url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
 			method: "GET",
 			headers: {
-				Authorization: `Bearer ${token}`,
+				Authorization: `Bearer ${authToken}`,
 			},
 		});
+
+		// Check cancellation token after download completes
+		// This is the "Ignore-on-Abort Guard" - bytes flew over wire, but we reject them
+		// Prevents storing canceled preloads without affecting concurrent valid requests
+		if (token?.isCancelled) {
+			throw new DOMException("Download cancelled", "AbortError");
+		}
 
 		return response.arrayBuffer;
 	};

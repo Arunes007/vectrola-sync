@@ -581,7 +581,12 @@ var DEFAULT_SETTINGS = {
   lastSyncTime: 0,
   syncCache: {},
   wikiFolderId: "",
-  audioFolderId: ""
+  audioFolderId: "",
+  // Audio cache defaults
+  audioCacheEnabled: true,
+  audioCacheMaxSizeMB: 100,
+  audioCachePreloadAhead: 2,
+  audioCachePreloadBehind: 1
 };
 
 // src/auth.ts
@@ -882,18 +887,21 @@ function createDriveClient(getToken) {
     });
     return response.text;
   };
-  const downloadFileBuffer = async (fileId) => {
-    const token = await getToken();
-    if (!token) {
+  const downloadFileBuffer = async (fileId, token) => {
+    const authToken = await getToken();
+    if (!authToken) {
       throw new Error("Not authenticated with Google Drive");
     }
     const response = await (0, import_obsidian2.requestUrl)({
       url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
       method: "GET",
       headers: {
-        Authorization: `Bearer ${token}`
+        Authorization: `Bearer ${authToken}`
       }
     });
+    if (token == null ? void 0 : token.isCancelled) {
+      throw new DOMException("Download cancelled", "AbortError");
+    }
     return response.arrayBuffer;
   };
   const uploadFile = async (name, content, parentId, existingFileId) => {
@@ -1300,6 +1308,500 @@ var VectrolaSyncSettingTab = class extends import_obsidian4.PluginSettingTab {
         cls: "setting-item-description"
       });
     }
+    new import_obsidian4.Setting(containerEl).setName("Audio Cache").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Enable audio caching").setDesc("Cache played songs for instant replay (uses IndexedDB)").addToggle(
+      (toggle) => toggle.setValue(this.deps.settings.audioCacheEnabled).onChange(async (value) => {
+        this.deps.settings.audioCacheEnabled = value;
+        await this.deps.saveSettings();
+      })
+    );
+    const maxLimit = import_obsidian4.Platform.isMobile ? 200 : 500;
+    new import_obsidian4.Setting(containerEl).setName("Cache size limit").setDesc(`Maximum storage for cached audio (50-${maxLimit} MB)`).addSlider(
+      (slider) => slider.setLimits(50, maxLimit, 50).setValue(Math.min(this.deps.settings.audioCacheMaxSizeMB, maxLimit)).setDynamicTooltip().onChange(async (value) => {
+        this.deps.settings.audioCacheMaxSizeMB = value;
+        await this.deps.saveSettings();
+      })
+    );
+    new import_obsidian4.Setting(containerEl).setName("Preload ahead").setDesc("Number of next tracks to preload (0-5)").addSlider(
+      (slider) => slider.setLimits(0, 5, 1).setValue(this.deps.settings.audioCachePreloadAhead).setDynamicTooltip().onChange(async (value) => {
+        this.deps.settings.audioCachePreloadAhead = value;
+        await this.deps.saveSettings();
+      })
+    );
+    const cache = this.deps.getAudioCache();
+    if (cache) {
+      cache.getStats().then((stats) => {
+        const hitRate = stats.hits + stats.misses > 0 ? Math.round(stats.hits / (stats.hits + stats.misses) * 100) : 0;
+        const sizeText = `${(stats.totalSize / 1024 / 1024).toFixed(1)} MB`;
+        const statsContainer = containerEl.createEl("div", { cls: "setting-item-description" });
+        statsContainer.style.marginTop = "-10px";
+        statsContainer.style.marginBottom = "10px";
+        statsContainer.textContent = `Cache: ${sizeText} (${stats.fileCount} songs) | Hit rate: ${hitRate}% (${stats.hits} hits, ${stats.misses} misses)`;
+      });
+    }
+    new import_obsidian4.Setting(containerEl).setName("Clear cache").setDesc("Remove all cached audio files").addButton(
+      (btn) => btn.setButtonText("Clear Cache").setWarning().onClick(async () => {
+        const cache2 = this.deps.getAudioCache();
+        if (cache2) {
+          await cache2.clear();
+          new import_obsidian4.Notice("Audio cache cleared");
+          this.display();
+        }
+      })
+    );
+  }
+};
+
+// src/audio-cache.ts
+var AudioCache = class {
+  constructor(config) {
+    this.config = config;
+    this.db = null;
+    this.inFlightRequests = /* @__PURE__ */ new Map();
+    // CancellationToken pattern: each preload gets its own unique token reference
+    // This avoids the "Cancel-then-Play" race condition where a canceled preload
+    // would incorrectly cancel a subsequent valid playback request for the same file
+    this.activePreloadTokens = /* @__PURE__ */ new Map();
+    this.preloadQueue = [];
+    this.isPreloadQueueRunning = false;
+    this.currentPreloadDownloadFn = null;
+    this.cachedFileIds = /* @__PURE__ */ new Set();
+    // Fast existence check
+    this.totalCacheSize = 0;
+    this.stats = { hits: 0, misses: 0 };
+    // Track currently-playing file to protect from eviction
+    this.protectedFileId = null;
+    this.DB_NAME = "vectrola-audio-cache";
+    this.DB_VERSION = 1;
+    this.STORE_NAME = "audio-files";
+  }
+  // =========================================================================
+  // Initialization
+  // =========================================================================
+  async init() {
+    try {
+      await this.openDatabase();
+      await this.loadCacheIndex();
+    } catch (e) {
+      console.warn("Audio cache database corrupted, recreating:", e);
+      await this.deleteDatabase();
+      await this.openDatabase();
+    }
+  }
+  openDatabase() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
+      request.onerror = () => reject(request.error);
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+          const store = db.createObjectStore(this.STORE_NAME, {
+            keyPath: "file_id"
+          });
+          store.createIndex("last_accessed", "last_accessed", {
+            unique: false
+          });
+        }
+      };
+      request.onsuccess = () => {
+        this.db = request.result;
+        resolve();
+      };
+    });
+  }
+  deleteDatabase() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(this.DB_NAME);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  }
+  /**
+   * Load cache index into memory for fast has() checks
+   */
+  async loadCacheIndex() {
+    if (!this.db)
+      return;
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(this.STORE_NAME, "readonly");
+      const store = tx.objectStore(this.STORE_NAME);
+      const request = store.openCursor();
+      this.cachedFileIds.clear();
+      this.totalCacheSize = 0;
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const entry = cursor.value;
+          this.cachedFileIds.add(entry.file_id);
+          this.totalCacheSize += entry.size;
+          cursor.continue();
+        } else {
+          resolve();
+        }
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+  // =========================================================================
+  // Core Cache Operations
+  // =========================================================================
+  /**
+   * Check if file is cached (sync, fast)
+   */
+  has(fileId) {
+    return this.cachedFileIds.has(fileId);
+  }
+  /**
+   * Set a file as protected from eviction (e.g., currently playing)
+   * Pass null to clear protection
+   */
+  setProtected(fileId) {
+    this.protectedFileId = fileId;
+  }
+  /**
+   * Main entry point - get from cache, coalesce in-flight, or download
+   * Handles deduplication automatically
+   *
+   * @param fileId - Google Drive file ID
+   * @param downloadFn - Function to download the file (receives optional CancellationToken)
+   * @param metadata - Track metadata for logging/debugging
+   * @param token - Optional CancellationToken (foreground plays typically don't need this)
+   */
+  async fetchOrGet(fileId, downloadFn, metadata, token) {
+    const cached = await this.get(fileId);
+    if (cached) {
+      this.stats.hits++;
+      console.log("Cache HIT:", metadata.title);
+      return cached;
+    }
+    const inFlight = this.inFlightRequests.get(fileId);
+    if (inFlight) {
+      console.log("Coalescing in-flight request:", metadata.title);
+      return inFlight;
+    }
+    this.stats.misses++;
+    console.log("Cache MISS:", metadata.title);
+    const downloadPromise = this.executeDownload(
+      fileId,
+      downloadFn,
+      metadata,
+      token
+    );
+    this.inFlightRequests.set(fileId, downloadPromise);
+    try {
+      return await downloadPromise;
+    } finally {
+      this.inFlightRequests.delete(fileId);
+    }
+  }
+  async executeDownload(fileId, downloadFn, metadata, token) {
+    const arrayBuffer = await downloadFn(token);
+    if (token == null ? void 0 : token.isCancelled) {
+      throw new DOMException("Download cancelled", "AbortError");
+    }
+    const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+    this.put(fileId, blob, metadata).catch((e) => {
+      console.warn("Failed to cache audio:", e);
+    });
+    return blob;
+  }
+  /**
+   * Get blob from cache, update access stats
+   * Reconstructs Blob from stored ArrayBuffer (WebKit IndexedDB doesn't preserve Blob properly)
+   */
+  async get(fileId) {
+    if (!this.db || !this.cachedFileIds.has(fileId)) {
+      return null;
+    }
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(this.STORE_NAME, "readwrite");
+      const store = tx.objectStore(this.STORE_NAME);
+      const request = store.get(fileId);
+      request.onsuccess = () => {
+        const entry = request.result;
+        if (!entry) {
+          this.cachedFileIds.delete(fileId);
+          resolve(null);
+          return;
+        }
+        entry.last_accessed = Date.now();
+        entry.access_count++;
+        store.put(entry);
+        const blob = new Blob([entry.buffer], { type: "audio/mpeg" });
+        resolve(blob);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+  /**
+   * Store blob in cache, trigger eviction if needed
+   * Converts Blob to ArrayBuffer for storage (WebKit IndexedDB bug workaround)
+   */
+  async put(fileId, blob, metadata) {
+    if (!this.db)
+      return;
+    const buffer = await blob.arrayBuffer();
+    const newTotalSize = this.totalCacheSize + buffer.byteLength;
+    if (newTotalSize > this.config.maxSizeBytes) {
+      await this.evictToWatermark(buffer.byteLength);
+    }
+    const entry = {
+      file_id: fileId,
+      buffer,
+      size: buffer.byteLength,
+      title: metadata.title,
+      artist: metadata.artist,
+      last_accessed: Date.now(),
+      access_count: 1,
+      created_at: Date.now()
+    };
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(this.STORE_NAME, "readwrite");
+      const store = tx.objectStore(this.STORE_NAME);
+      const request = store.put(entry);
+      request.onsuccess = () => {
+        this.cachedFileIds.add(fileId);
+        this.totalCacheSize += buffer.byteLength;
+        console.log(
+          `Cached: ${metadata.title} (${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB)`
+        );
+        resolve();
+      };
+      request.onerror = () => {
+        const error = request.error;
+        if ((error == null ? void 0 : error.name) === "QuotaExceededError") {
+          console.warn("Cache quota exceeded, attempting emergency eviction");
+          this.emergencyEvict().then(() => this.put(fileId, blob, metadata)).then(resolve).catch(reject);
+        } else {
+          reject(error);
+        }
+      };
+    });
+  }
+  // =========================================================================
+  // Eviction
+  // =========================================================================
+  /**
+   * Batch eviction: trigger at 100%, evict to 80%
+   * Uses hybrid LRU + frequency scoring
+   * Protects currently-playing track from eviction
+   */
+  async evictToWatermark(incomingSize) {
+    if (!this.db)
+      return;
+    const targetSize = this.config.maxSizeBytes * 0.8 - incomingSize - 10 * 1024 * 1024;
+    if (this.totalCacheSize <= targetSize)
+      return;
+    const metadata = await this.getAllMetadata();
+    const scored = metadata.map((m) => ({
+      ...m,
+      score: this.evictionScore(m)
+    }));
+    scored.sort((a, b) => a.score - b.score);
+    const toEvict = [];
+    let projectedSize = this.totalCacheSize;
+    for (const entry of scored) {
+      if (projectedSize <= Math.max(0, targetSize))
+        break;
+      if (entry.file_id === this.protectedFileId) {
+        console.log(`Skipping eviction of protected track: ${entry.file_id}`);
+        continue;
+      }
+      toEvict.push(entry.file_id);
+      projectedSize -= entry.size;
+    }
+    if (toEvict.length === 0)
+      return;
+    console.log(`Evicting ${toEvict.length} files to reach watermark`);
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(this.STORE_NAME, "readwrite");
+      const store = tx.objectStore(this.STORE_NAME);
+      for (const fileId of toEvict) {
+        store.delete(fileId);
+        this.cachedFileIds.delete(fileId);
+      }
+      tx.oncomplete = () => {
+        this.totalCacheSize = projectedSize;
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  /**
+   * Emergency eviction when quota exceeded - clear 50%
+   */
+  async emergencyEvict() {
+    const targetSize = this.config.maxSizeBytes * 0.5;
+    await this.evictToWatermark(
+      this.totalCacheSize - targetSize + 50 * 1024 * 1024
+    );
+  }
+  /**
+   * Eviction score: lower = evict first
+   * Combines recency (LRU) with frequency (keep popular tracks longer)
+   */
+  evictionScore(entry) {
+    const ageMs = Date.now() - entry.last_accessed;
+    const ageDays = ageMs / (24 * 60 * 60 * 1e3);
+    const frequencyBonus = Math.log2(entry.access_count + 1) * 0.5;
+    return -ageDays + frequencyBonus;
+  }
+  async getAllMetadata() {
+    if (!this.db)
+      return [];
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(this.STORE_NAME, "readonly");
+      const store = tx.objectStore(this.STORE_NAME);
+      const request = store.openCursor();
+      const metadata = [];
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const entry = cursor.value;
+          metadata.push({
+            file_id: entry.file_id,
+            size: entry.size,
+            last_accessed: entry.last_accessed,
+            access_count: entry.access_count
+          });
+          cursor.continue();
+        } else {
+          resolve(metadata);
+        }
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+  // =========================================================================
+  // Preloading
+  // =========================================================================
+  /**
+   * Queue tracks for background preloading
+   * Each preload gets its own CancellationToken to avoid race conditions
+   */
+  async preloadTracks(tracks, downloadFn) {
+    const validTracks = tracks.filter((t) => {
+      var _a, _b, _c;
+      return (_c = (_b = (_a = t.sources) == null ? void 0 : _a.cloud) == null ? void 0 : _b.gdrive) == null ? void 0 : _c.file_id;
+    });
+    if (validTracks.length === 0)
+      return;
+    this.currentPreloadDownloadFn = downloadFn;
+    for (const track of validTracks) {
+      const fileId = track.sources.cloud.gdrive.file_id;
+      if (this.has(fileId))
+        continue;
+      if (this.activePreloadTokens.has(fileId))
+        continue;
+      if (this.preloadQueue.some((t) => {
+        var _a, _b, _c;
+        return ((_c = (_b = (_a = t.sources) == null ? void 0 : _a.cloud) == null ? void 0 : _b.gdrive) == null ? void 0 : _c.file_id) === fileId;
+      }))
+        continue;
+      this.preloadQueue.push(track);
+    }
+    if (!this.isPreloadQueueRunning) {
+      this.isPreloadQueueRunning = true;
+      this.processNextPreload();
+    }
+  }
+  /**
+   * Process preload queue sequentially
+   * Each preload gets its own unique CancellationToken reference
+   */
+  async processNextPreload() {
+    var _a, _b, _c;
+    if (!this.isPreloadQueueRunning || this.preloadQueue.length === 0 || !this.currentPreloadDownloadFn) {
+      this.isPreloadQueueRunning = false;
+      return;
+    }
+    const track = this.preloadQueue.shift();
+    const fileId = (_c = (_b = (_a = track.sources) == null ? void 0 : _a.cloud) == null ? void 0 : _b.gdrive) == null ? void 0 : _c.file_id;
+    if (!fileId) {
+      this.processNextPreload();
+      return;
+    }
+    if (this.has(fileId) || this.inFlightRequests.has(fileId)) {
+      this.processNextPreload();
+      return;
+    }
+    const token = { isCancelled: false };
+    this.activePreloadTokens.set(fileId, token);
+    try {
+      console.log(`Preloading: ${track.title}`);
+      const arrayBuffer = await this.currentPreloadDownloadFn(fileId, token);
+      if (token.isCancelled) {
+        throw new DOMException("Preload cancelled", "AbortError");
+      }
+      const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+      await this.put(fileId, blob, {
+        title: track.title,
+        artist: track.artist
+      });
+      console.log(`Preloaded: ${track.title}`);
+    } catch (e) {
+      if (e.name === "AbortError") {
+        console.log(`Preload cancelled: ${track.title}`);
+      } else {
+        console.warn(`Preload failed: ${track.title}`, e);
+      }
+    } finally {
+      this.activePreloadTokens.delete(fileId);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+    this.processNextPreload();
+  }
+  /**
+   * Cancel all in-progress preloads by flipping their tokens
+   * The downloads will complete (can't stop requestUrl), but results will be ignored
+   */
+  cancelPreload() {
+    for (const [fileId, token] of this.activePreloadTokens.entries()) {
+      console.log(`Cancelling preload: ${fileId}`);
+      token.isCancelled = true;
+    }
+    this.activePreloadTokens.clear();
+    this.preloadQueue = [];
+    this.isPreloadQueueRunning = false;
+  }
+  // =========================================================================
+  // Management
+  // =========================================================================
+  async getStats() {
+    return {
+      totalSize: this.totalCacheSize,
+      fileCount: this.cachedFileIds.size,
+      hits: this.stats.hits,
+      misses: this.stats.misses
+    };
+  }
+  async clear() {
+    if (!this.db)
+      return;
+    this.cancelPreload();
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(this.STORE_NAME, "readwrite");
+      const store = tx.objectStore(this.STORE_NAME);
+      const request = store.clear();
+      request.onsuccess = () => {
+        this.cachedFileIds.clear();
+        this.totalCacheSize = 0;
+        this.stats = { hits: 0, misses: 0 };
+        console.log("Audio cache cleared");
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+  /**
+   * Close database connection (call on plugin unload)
+   */
+  close() {
+    var _a;
+    this.cancelPreload();
+    this.inFlightRequests.clear();
+    (_a = this.db) == null ? void 0 : _a.close();
+    this.db = null;
   }
 };
 
@@ -1310,6 +1812,8 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     this.syncInterval = null;
     // Event emitter for auth state changes
     this.events = new import_obsidian5.Events();
+    // Track active blob URL for memory leak prevention
+    this.currentAudioUrl = null;
   }
   async onload() {
     var _a, _b, _c;
@@ -1348,6 +1852,11 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       saveSettings: () => this.saveSettings(),
       isAuthenticated: () => this.auth.isAuthenticated()
     });
+    this.audioCache = new AudioCache({
+      maxSizeBytes: this.settings.audioCacheMaxSizeMB * 1024 * 1024,
+      isMobile: import_obsidian5.Platform.isMobile
+    });
+    await this.audioCache.init();
     this.registerObsidianProtocolHandler("vectrola-auth", (params) => {
       this.auth.handleOAuthCallback(params);
     });
@@ -1400,7 +1909,8 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
       retryFolderDiscovery: () => this.auth.retryFolderDiscovery(),
       syncFromDrive: () => this.sync.syncFromDrive(),
       syncToDrive: () => this.sync.syncToDrive(),
-      setupSyncInterval: () => this.setupSyncInterval()
+      setupSyncInterval: () => this.setupSyncInterval(),
+      getAudioCache: () => this.audioCache
     }));
     if (this.settings.autoSyncOnOpen && this.auth.isAuthenticated()) {
       setTimeout(() => this.sync.syncFromDrive(), 3e3);
@@ -1449,8 +1959,21 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     });
   }
   onunload() {
+    var _a;
     if (this.syncInterval) {
       window.clearInterval(this.syncInterval);
+    }
+    this.cleanUpActiveAudioUrl();
+    (_a = this.audioCache) == null ? void 0 : _a.close();
+  }
+  /**
+   * Revoke active blob URL to prevent memory leaks
+   * Object URLs persist until explicitly revoked or document unload
+   */
+  cleanUpActiveAudioUrl() {
+    if (this.currentAudioUrl) {
+      URL.revokeObjectURL(this.currentAudioUrl);
+      this.currentAudioUrl = null;
     }
   }
   async loadSettings() {
@@ -1520,6 +2043,12 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
         player.playlistSource = pageTitle;
         this.playTrack(index);
       };
+      if (this.settings.audioCacheEnabled && playlist.length > 0) {
+        this.audioCache.preloadTracks(
+          playlist.slice(0, 3),
+          (fileId, token) => this.drive.downloadFileBuffer(fileId, token)
+        );
+      }
       const header = container.createEl("div");
       header.className = "vectrola-page-header";
       const artworkContainer = header.createEl("div");
@@ -1791,6 +2320,7 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     if (player.audio.src && player.audio.src.startsWith("blob:")) {
       URL.revokeObjectURL(player.audio.src);
     }
+    this.cleanUpActiveAudioUrl();
     if (!import_obsidian5.Platform.isMobile && sources.local) {
       try {
         const os = require("os");
@@ -1844,11 +2374,25 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     if (!audioLoaded && ((_d = (_c = sources.cloud) == null ? void 0 : _c.gdrive) == null ? void 0 : _d.file_id) && this.auth.isAuthenticated()) {
       const gdriveId = sources.cloud.gdrive.file_id;
       try {
-        const arrayBuffer = await this.drive.downloadFileBuffer(gdriveId);
-        const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-        player.audio.src = URL.createObjectURL(blob);
+        let blob;
+        if (this.settings.audioCacheEnabled) {
+          this.audioCache.setProtected(gdriveId);
+          blob = await this.audioCache.fetchOrGet(
+            gdriveId,
+            () => this.drive.downloadFileBuffer(gdriveId),
+            { title: track.title, artist: track.artist }
+          );
+        } else {
+          const arrayBuffer = await this.drive.downloadFileBuffer(gdriveId);
+          blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+          console.log("Playing from GDrive (cache disabled):", gdriveId);
+        }
+        this.currentAudioUrl = URL.createObjectURL(blob);
+        player.audio.src = this.currentAudioUrl;
         audioLoaded = true;
-        console.log("Playing from GDrive:", gdriveId);
+        if (this.settings.audioCacheEnabled) {
+          this.schedulePreload(index);
+        }
       } catch (e) {
         console.warn("GDrive playback failed:", e);
       }
@@ -1973,6 +2517,36 @@ var VectrolaSyncPlugin = class extends import_obsidian5.Plugin {
     });
     if (player.shuffleMode && !player.shuffleHistory.includes(index)) {
       player.shuffleHistory.push(index);
+    }
+  }
+  /**
+   * Schedule preloading of adjacent tracks in background
+   * Called after a track starts playing
+   */
+  schedulePreload(currentIndex) {
+    const player = window.vectrolaPlayer;
+    if (!player || !this.settings.audioCacheEnabled)
+      return;
+    this.audioCache.cancelPreload();
+    const preloadTargets = [];
+    const { audioCachePreloadAhead, audioCachePreloadBehind } = this.settings;
+    for (let i = 1; i <= audioCachePreloadAhead; i++) {
+      const idx = currentIndex + i;
+      if (idx < player.playlist.length) {
+        preloadTargets.push(player.playlist[idx]);
+      }
+    }
+    for (let i = 1; i <= audioCachePreloadBehind; i++) {
+      const idx = currentIndex - i;
+      if (idx >= 0) {
+        preloadTargets.push(player.playlist[idx]);
+      }
+    }
+    if (preloadTargets.length > 0) {
+      this.audioCache.preloadTracks(
+        preloadTargets,
+        (fileId, token) => this.drive.downloadFileBuffer(fileId, token)
+      );
     }
   }
   togglePlayPause() {

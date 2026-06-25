@@ -29,6 +29,11 @@ export interface VectrolaSyncSettings {
 	// Vectrola folder IDs (auto-discovered from CLI-created folders)
 	wikiFolderId: string;
 	audioFolderId: string;
+	// Audio cache settings
+	audioCacheEnabled: boolean;
+	audioCacheMaxSizeMB: number;
+	audioCachePreloadAhead: number;
+	audioCachePreloadBehind: number;
 }
 
 export interface DriveFile {
@@ -55,6 +60,13 @@ export interface TrackInfo {
 	track_id?: string;
 	link: string;
 	mood?: string;
+}
+
+// Cancellation token for soft-abort pattern
+// Used because Obsidian's requestUrl doesn't support AbortSignal
+// Each download gets a unique token reference to avoid race conditions
+export interface CancellationToken {
+	isCancelled: boolean;
 }
 
 // Global player state
@@ -107,4 +119,9 @@ export const DEFAULT_SETTINGS: VectrolaSyncSettings = {
 	syncCache: {},
 	wikiFolderId: "",
 	audioFolderId: "",
+	// Audio cache defaults
+	audioCacheEnabled: true,
+	audioCacheMaxSizeMB: 100,
+	audioCachePreloadAhead: 2,
+	audioCachePreloadBehind: 1,
 };
